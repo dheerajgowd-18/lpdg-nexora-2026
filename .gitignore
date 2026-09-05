@@ -5,7 +5,10 @@ __pycache__/
 
 data/
 *.csv
+!predictions.csv
+!predictions_baseline.csv
 *.parquet
 *.xlsx
 
 .env
+*_extracted.txt
