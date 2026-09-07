@@ -9,6 +9,7 @@ data/
 !predictions_baseline.csv
 *.parquet
 *.xlsx
+reference/
 
 .env
 *_extracted.txt
