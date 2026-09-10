@@ -22,27 +22,89 @@ import datetime as dt
 from pathlib import Path
 import sys
 import time
+from typing import Sequence
 import pandas as pd
 
+from .config import (
+    SCORED_WEEKS,
+    VISITS_PER_WEEK,
+    REQUIRED_PREDICTION_COLUMNS,
+)
 from .data_loader import DataLoader
 from .eligibility import get_eligible_gateways
 from .scoring import score_week
-from .ranking import rank_and_select, VISITS_PER_WEEK
+from .ranking import rank_and_select
 from .reasons import add_reasons
 from .validation import validate_predictions_df, run_official_validator
 
-SCORED_WEEKS = [
-    dt.date(2026, 2, 2) + dt.timedelta(days=7 * i) for i in range(8)
-]
+
+def predict_week(
+    master_df: pd.DataFrame,
+    telemetry_df: pd.DataFrame,
+    decision_monday: dt.date | dt.datetime | str,
+    top_k: int = VISITS_PER_WEEK,
+) -> pd.DataFrame:
+    """Computes Top-K predictive maintenance recommendations for a single decision Monday.
+
+    Executes core scoring & ranking stages (5 to 11):
+    - Evaluates fleet lifecycle eligibility at T
+    - Computes Baseline_3Sigma breach scores over [T-28d, T) and [T-7d, T)
+    - Retains eligible silent gateways under Option B (score 0.0, no bonus)
+    - Sorts deterministically (score DESC, gateway_id ASC)
+    - Selects Top-K assets with ranks 1..K
+    - Generates observational, non-causal explanation reasons
+
+    Parameters:
+        master_df: Ingested and normalized gateway_master DataFrame.
+        telemetry_df: Ingested and deduplicated telemetry DataFrame.
+        decision_monday: Cutoff Monday date (date, datetime, or ISO string).
+        top_k: Recommendation list capacity (default 15).
+
+    Returns:
+        DataFrame with columns ['week_start', 'rank', 'gateway_id', 'score', 'reason'].
+    """
+    if isinstance(decision_monday, str):
+        t_date = dt.date.fromisoformat(decision_monday)
+    elif isinstance(decision_monday, dt.datetime):
+        t_date = decision_monday.date()
+    elif isinstance(decision_monday, dt.date):
+        t_date = decision_monday
+    else:
+        raise TypeError(f"Unsupported decision_monday type: {type(decision_monday)}")
+
+    # 1. Lifecycle eligibility
+    eligible_ids = get_eligible_gateways(master_df, t_date)
+
+    # 2. Temporal cutoff & Baseline_3Sigma scoring
+    scored_df = score_week(telemetry_df, t_date)
+
+    # 3. Silent gateway alignment, deterministic ranking, Top-K selection
+    top_df = rank_and_select(scored_df, eligible_ids, top_k=top_k)
+
+    # 4. Reason generation
+    top_df = add_reasons(top_df)
+
+    # 5. Schema formatting
+    top_df["week_start"] = t_date.isoformat()
+    return top_df[REQUIRED_PREDICTION_COLUMNS].copy()
 
 
 def run_pipeline(
     data_dir: str | Path = "data",
     out_path: str | Path = "predictions.csv",
-    scored_weeks: list[dt.date] = SCORED_WEEKS,
+    scored_weeks: Sequence[dt.date] = SCORED_WEEKS,
     run_validator: bool = True,
 ) -> pd.DataFrame:
     """Executes the authoritative NEXORA 2026 Part 1 production pipeline.
+
+    Loads datasets, iterates through all scored evaluation Mondays,
+    validates output against official criteria, and persists predictions.csv.
+
+    Parameters:
+        data_dir: Path to data directory containing gateway_master.csv and telemetry/.
+        out_path: Path to output predictions.csv.
+        scored_weeks: List of decision Mondays to evaluate (default: 8 competition weeks).
+        run_validator: Whether to execute validate_submission.py upon completion.
 
     Returns:
         The generated predictions DataFrame.
@@ -50,6 +112,9 @@ def run_pipeline(
     t0 = time.perf_counter()
     data_path = Path(data_dir)
     out_file = Path(out_path)
+
+    if not scored_weeks:
+        raise ValueError("scored_weeks sequence cannot be empty.")
 
     print(f"[NEXORA Pipeline] Initializing production pipeline...")
     print(f"  Data directory: {data_path.resolve()}")
@@ -74,30 +139,15 @@ def run_pipeline(
 
     for idx, monday in enumerate(scored_weeks, 1):
         w_t0 = time.perf_counter()
-        
-        # 5. Lifecycle eligibility
-        eligible_ids = get_eligible_gateways(master_df, monday)
-
-        # 6 & 7. Temporal cutoff & Baseline_3Sigma scoring
-        scored_df = score_week(telemetry_df, monday)
-
-        # 8, 9, 10. Silent gateway alignment, deterministic ranking, Top-15
-        top_df = rank_and_select(scored_df, eligible_ids, top_k=VISITS_PER_WEEK)
-
-        # 11. Reason generation
-        top_df = add_reasons(top_df)
-
-        top_df["week_start"] = monday.isoformat()
-        final_week_cols = ["week_start", "rank", "gateway_id", "score", "reason"]
-        weekly_frames.append(top_df[final_week_cols])
-
+        week_df = predict_week(master_df, telemetry_df, monday, top_k=VISITS_PER_WEEK)
+        weekly_frames.append(week_df)
         w_time = time.perf_counter() - w_t0
-        print(f"  Week {idx}/{len(scored_weeks)} [{monday}]: {len(eligible_ids)} eligible fleet | Top-15 selected ({w_time:.2f}s)")
+        print(f"  Week {idx}/{len(scored_weeks)} [{monday}]: Top-{len(week_df)} selected ({w_time:.2f}s)")
 
     t_scoring = time.perf_counter() - t_score_start
     combined_df = pd.concat(weekly_frames, ignore_index=True)
 
-    # 12. Internal validation
+    # 3. Internal validation
     print("[NEXORA Pipeline] Running internal production validation...")
     problems = validate_predictions_df(combined_df, scored_weeks=scored_weeks)
     if problems:
@@ -106,12 +156,12 @@ def run_pipeline(
         raise ValueError(f"Pipeline output failed internal validation with {len(problems)} errors.")
     print("  Internal validation PASSED with zero errors.")
 
-    # Write predictions.csv
+    # 4. Serialize predictions.csv
     out_file.parent.mkdir(parents=True, exist_ok=True)
     combined_df.to_csv(out_file, index=False)
     print(f"[NEXORA Pipeline] Serialized {len(combined_df)} rows to {out_file.resolve()}")
 
-    # Official submission validation
+    # 5. Official submission validation
     if run_validator:
         print("[NEXORA Pipeline] Executing official validate_submission.py...")
         run_official_validator(out_file)
