@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-MAX_REASON_CHARS = 300
+from .config import MAX_REASON_CHARS, FROZEN_ZERO_SCORE_REASON
 
 
 def generate_reason(score: float | int, flagged_hours: int, worst_metric: str) -> str:
@@ -24,7 +24,7 @@ def generate_reason(score: float | int, flagged_hours: int, worst_metric: str) -
             f"28-day baseline in the last 7 days; first breach on {metric_desc}"
         )
     else:
-        reason = "0 individual 3-sigma metric breaches against this gateway's own 28-day baseline in the last 7 days"
+        reason = FROZEN_ZERO_SCORE_REASON
 
     if len(reason) > MAX_REASON_CHARS:
         reason = reason[:MAX_REASON_CHARS]

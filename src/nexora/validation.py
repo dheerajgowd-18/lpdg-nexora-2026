@@ -13,12 +13,12 @@ from typing import Sequence
 import pandas as pd
 from .data_loader import is_valid_gateway_id
 
-REQUIRED_COLUMNS = ["week_start", "rank", "gateway_id", "score", "reason"]
-VISITS_PER_WEEK = 15
-DEFAULT_SCORED_WEEKS = [
-    dt.date(2026, 2, 2) + dt.timedelta(days=7 * i) for i in range(8)
-]
-MAX_REASON_CHARS = 300
+from .config import (
+    REQUIRED_PREDICTION_COLUMNS as REQUIRED_COLUMNS,
+    VISITS_PER_WEEK,
+    SCORED_WEEKS as DEFAULT_SCORED_WEEKS,
+    MAX_REASON_CHARS,
+)
 
 
 def validate_predictions_df(

@@ -14,7 +14,7 @@ import re
 import pandas as pd
 import pytest
 
-from nexora.pipeline import run_pipeline, SCORED_WEEKS
+from nexora.pipeline import run_pipeline, predict_week, SCORED_WEEKS
 from nexora.validation import validate_predictions_df, run_official_validator
 
 CANONICAL_HEX_REGEX = re.compile(r"^[0-9A-F]{12}$")
@@ -90,6 +90,29 @@ def test_pipeline_execution_synthetic_e2e(synthetic_pipeline_env):
     # Internal validation must report zero errors
     errors = validate_predictions_df(df, scored_weeks=test_weeks)
     assert errors == []
+
+
+def test_predict_week_single_monday_independent(synthetic_pipeline_env):
+    """Verifies that predict_week executes independently for a single Monday.
+
+    Ensures clean decoupling of the single-week prediction engine for Phase 11 FastAPI service.
+    """
+    data_dir, _ = synthetic_pipeline_env
+    from nexora.data_loader import DataLoader
+    loader = DataLoader(data_dir=data_dir)
+    master_df = loader.load_master()
+    telemetry_df = loader.load_telemetry()
+
+    monday = dt.date(2026, 2, 2)
+    week_df = predict_week(master_df, telemetry_df, monday, top_k=15)
+
+    assert len(week_df) == 15
+    assert list(week_df.columns) == EXPECTED_COLUMNS
+    assert list(week_df["rank"]) == list(range(1, 16))
+    assert (week_df["week_start"] == "2026-02-02").all()
+    assert (week_df["score"] >= 0.0).all()
+    assert (week_df["reason"].str.len() > 0).all()
+    assert (week_df["reason"].str.len() <= 300).all()
 
 
 # =============================================================================
