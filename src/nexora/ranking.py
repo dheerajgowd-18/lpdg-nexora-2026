@@ -14,7 +14,7 @@ import datetime as dt
 from typing import Sequence
 import pandas as pd
 
-VISITS_PER_WEEK = 15
+from .config import VISITS_PER_WEEK
 
 
 def rank_and_select(
@@ -35,16 +35,24 @@ def rank_and_select(
         ['rank', 'gateway_id', 'score', 'flagged_hours', 'worst_metric'].
 
     Raises:
-        ValueError: If total eligible fleet has fewer than top_k assets.
+        ValueError: If top_k <= 0, if eligible fleet < top_k, or if scored_df contains duplicate gateway_id records.
     """
+    if top_k <= 0:
+        raise ValueError(f"top_k must be a positive integer, got {top_k}")
+
     eligible_set = set(eligible_ids)
     if len(eligible_set) < top_k:
         raise ValueError(
             f"Fewer than {top_k} eligible gateways exist: {len(eligible_set)} found."
         )
 
-    # Filter scored_df to only eligible gateways
+    # Validate that scored_df contains no duplicate records for any gateway
     if not scored_df.empty:
+        if scored_df["gateway_id"].duplicated().any():
+            dups = scored_df.loc[scored_df["gateway_id"].duplicated(), "gateway_id"].unique()
+            raise ValueError(
+                f"Duplicate scored records detected for gateway(s): {list(dups)}"
+            )
         valid_scores = scored_df[scored_df["gateway_id"].isin(eligible_set)].copy()
     else:
         valid_scores = pd.DataFrame(columns=["gateway_id", "score", "flagged_hours", "worst_metric"])

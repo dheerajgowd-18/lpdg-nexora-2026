@@ -104,3 +104,17 @@ def test_output_schema_and_column_types():
     assert list(top15.columns) == expected_cols
     assert top15["rank"].dtype in [int, "int32", "int64"]
     assert top15["score"].dtype in [float, "float64"]
+
+
+def test_duplicate_scored_records_raises_valueerror():
+    """rank_and_select explicitly rejects duplicate scored records for the same gateway."""
+    eligible_ids = [f"001A7D0000{i:02X}" for i in range(1, 20)]
+    duplicated_df = pd.DataFrame({
+        "gateway_id": ["001A7D000001", "001A7D000001", "001A7D000002"],
+        "score": [12.0, 8.0, 4.0],
+        "flagged_hours": [12, 8, 4],
+        "worst_metric": ["reboot_cnt", "offline_duration_sec", "disconnection_cnt"],
+    })
+    with pytest.raises(ValueError, match="Duplicate scored records detected"):
+        rank_and_select(duplicated_df, eligible_ids, top_k=15)
+

@@ -15,18 +15,7 @@ import pandas as pd
 BARE_HEX_REGEX = re.compile(r"^[0-9A-Fa-f]{12}$")
 COLON_HEX_REGEX = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
-REQUIRED_TELEMETRY_COLUMNS = [
-    "gateway_id",
-    "ts_utc",
-    "offline_duration_sec",
-    "disconnection_cnt",
-    "reboot_cnt",
-]
-
-REQUIRED_MASTER_COLUMNS = [
-    "gateway_id",
-    "installed_on",
-]
+from .config import REQUIRED_MASTER_COLUMNS, REQUIRED_TELEMETRY_COLUMNS
 
 
 def normalize_gateway_id(gateway_id: str) -> str:
@@ -149,6 +138,8 @@ class DataLoader:
 
         # Parse UTC timestamp
         combined["ts"] = pd.to_datetime(combined["ts_utc"], utc=True)
+        if combined["ts"].isna().any():
+            raise ValueError("telemetry partition contains null or unparseable timestamps in 'ts_utc'.")
 
         # Exact deduplication on (gateway_id, ts_utc)
         combined = combined.drop_duplicates(subset=["gateway_id", "ts_utc"], keep="first")

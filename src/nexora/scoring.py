@@ -18,10 +18,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-METRICS = ["offline_duration_sec", "disconnection_cnt", "reboot_cnt"]
-BASELINE_DAYS = 28
-RECENT_DAYS = 7
-SIGMA = 3.0
+from .config import BASELINE_DAYS, RECENT_DAYS, SIGMA, METRICS
 
 
 def score_week(
@@ -43,8 +40,20 @@ def score_week(
         t_date = dt.date.fromisoformat(decision_monday)
     elif isinstance(decision_monday, dt.datetime):
         t_date = decision_monday.date()
-    else:
+    elif isinstance(decision_monday, dt.date):
         t_date = decision_monday
+    else:
+        raise TypeError(f"Unsupported decision_monday type: {type(decision_monday)}")
+
+    required_cols = ["gateway_id", "ts", *METRICS]
+    missing = [c for c in required_cols if c not in telemetry_df.columns]
+    if missing:
+        raise ValueError(f"telemetry_df is missing required column(s): {missing}")
+
+    if not telemetry_df.empty:
+        ts_dtype = telemetry_df["ts"].dtype
+        if not hasattr(ts_dtype, "tz") or ts_dtype.tz is None:
+            raise ValueError("telemetry_df 'ts' column must be timezone-aware (UTC).")
 
     end = pd.Timestamp(t_date, tz="UTC")
     baseline_start = end - dt.timedelta(days=BASELINE_DAYS)
