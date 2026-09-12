@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-The LPDG utility network operates approximately 320 active LoRaWAN gateways across Germany, with physical field maintenance strictly constrained to **15 site visits per week**. When gateways degrade silently, downstream meter reads fail, leading to delayed billing and estimated €380 false alarm / €600 unaddressed defect proxy penalties.
+The LPDG utility network operates approximately 320 active LoRaWAN gateways across Germany, with physical field maintenance strictly constrained to **15 site visits per week**. When gateways degrade silently, downstream meter reads fail, leading to delayed billing and estimated £380 false alarm / £600 unaddressed defect proxy penalties.
 
 This document outlines the **five pivotal engineering decisions** made in developing NEXORA 2026, documenting the alternatives considered, empirical trade-offs, and final justifications.
 
@@ -25,9 +25,9 @@ We selected and locked **`Baseline_3Sigma`** as the production ranking strategy.
 
 ### Why We Did Not Choose the Alternatives
 Across 26 weeks of leakage-safe historical backtesting (`reports/PHASE_6_3_STRATEGY_DECISION.md`), composite candidates captured only marginal additional true defect repairs (+2.4%) at the cost of a catastrophic surge in false alarms (+57% false alarms). Under the challenge economic proxy structure:
-- Every false dispatch costs €380 in wasted technician labor and displaces a degraded gateway.
-- Every unaddressed faulty gateway costs €600/week.
-Composite candidates resulted in substantially higher net standardized economic loss (€61,280 vs. €57,600 for Baseline_3Sigma). Machine learning models suffered from severe class imbalance (only 642 total historical work orders over 8 months) and survivorship bias. `Baseline_3Sigma` delivered superior precision, zero overfitting, and transparent explainability.
+- Every false dispatch costs £380 in wasted technician labor and displaces a degraded gateway.
+- Every unaddressed faulty gateway costs £600/week.
+Composite candidates resulted in substantially higher net standardized economic loss (£61,280 vs. £57,600 for Baseline_3Sigma). Machine learning models suffered from severe class imbalance (only 642 total historical work orders over 8 months) and survivorship bias. `Baseline_3Sigma` delivered superior precision, zero overfitting, and transparent explainability.
 
 ---
 
@@ -68,10 +68,16 @@ Relying on telemetry presence causes two fatal production failure modes:
 ### What We Chose
 We chose **Area B — Software Development**. We wrapped the verified predictive engine in a production-grade software package featuring:
 - A fully decoupled single-week prediction engine (`predict_week`) and CLI orchestrator.
-- A high-performance FastAPI REST service (`GET /health`, `GET /predictions/{week_start}`, `GET /gateways/{gateway_id}`, `POST /run`).
-- Comprehensive regression protection (123 automated tests across 11 modules).
+- A high-performance FastAPI REST service directly implementing the Challenge Brief specifications:
+  - `GET /predictions`: ask it for this week's 15 gateways to visit (defaults to current/latest competition week).
+  - `GET /predictions/{week_start}`: ask it for any specific competition Monday's 15 gateways.
+  - `GET /gateways/{gateway_id}/explanation`: ask it why a particular gateway is where it is (rank, score, breach count, and observational reason).
+  - `GET /gateways/{gateway_id}`: retrieve master asset metadata and dynamic lifecycle eligibility.
+  - `POST /run`: tell it to run again (reloads mounted data partitions and recomputes recommendations).
+  - `GET /health`: liveness probe.
+- Comprehensive regression protection (128 automated tests across 12 modules, including dedicated bug regression suite `tests/test_bug_regression.py`).
 - Explicit error handling rejecting corrupt schemas, bad dates, duplicate records, and out-of-bounds inputs.
-- Clean one-command execution via standard packaging (`pyproject.toml`).
+- Clean one-command execution via standard packaging (`pyproject.toml`), `Makefile` (`make run`), and `docker-compose.yml` (`docker compose up`).
 
 ### What Else We Considered
 - **Area E (Machine Learning):** Training custom gradient boosting or neural anomaly models.
@@ -102,8 +108,19 @@ We compute mean and standard deviation per gateway over its own trailing 28-day 
 
 | Decision | Selected Choice | Rejected Alternatives | Primary Justification |
 | :--- | :--- | :--- | :--- |
-| **1. Strategy** | `Baseline_3Sigma` | Multi-feature ML, Composite Candidates A–F | +57% false alarm surge in composite models; €3,680 higher economic penalty. |
+| **1. Strategy** | `Baseline_3Sigma` | Multi-feature ML, Composite Candidates A–F | +57% false alarm surge in composite models; £3,680 higher economic penalty. |
 | **2. Silent Fleet** | Option B (Retain with score=0) | Option A (Drop), Candidate F (+10 bonus) | Avoids ignoring total outages while preventing 30 false alarms from arbitrary bonuses. |
 | **3. Fleet Gating** | Master Lifecycle Date Filtering | Telemetry self-discovery | Prevents dispatching retired hardware and eliminates lookahead leakage. |
 | **4. Track** | Area B (Software Development) | Area E (Machine Learning), Area D (Data Science) | Maximizes operational reliability, testability, API integration, and code maintainability. |
 | **5. Statistics** | Trailing 28d individual baseline, $ddof=1$, zero-variance NaN | Global fleet pooling, rolling Z-score | Accounts for asset heterogeneity; prevents division-by-zero artifacts. |
+
+---
+
+## Challenge Brief Deliverable Cross-References
+- **Part 1 — Requirement 1 (One-Command Execution):** `make run`, `docker compose up`, or `python -m nexora.pipeline --data data --out predictions.csv`.
+- **Part 1 — Requirement 2 (predictions.csv):** Generated and verified via `validate_submission.py predictions.csv`.
+- **Part 1 — Requirement 3 (DECISIONS.md):** This document.
+- **Part 1 — Requirement 4 (What It Cannot Do):** Documented extensively in `README.md` Section 12 ("What It Cannot Do & Operational Limitations" and "What Another Two Weeks Would Fix").
+- **Part 1 — Requirement 5 (AI-USAGE.md):** Full disclosure in `AI-USAGE.md`.
+- **Part 2 — Area B (Software Development):** Production FastAPI service in `src/nexora/api.py`, 128 automated tests in `tests/`, clean decoupled architecture, and interactive demo frontend in `frontend/`.
+

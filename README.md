@@ -23,7 +23,7 @@ The challenge brief establishes strict technical and economic criteria:
 - **Submission Output:** Exactly $8 \times 15 = 120$ rows in `predictions.csv`.
 - **Schema Contract:** `week_start, rank, gateway_id, score, reason`.
 - **Validation:** Must pass the official grader harness `python validate_submission.py predictions.csv` with exit code `0`.
-- **Economic Cost Proxies:** Standardized decision-analysis penalties of **€380** for a false dispatch (`Kein Fehler gefunden`) and **€600/week** for an unaddressed defect (`Fehler behoben`).
+- **Economic Cost Proxies:** Standardized decision-analysis penalties of **£380** for a false dispatch (`Kein Fehler gefunden`) and **£600/week** for an unaddressed defect (`Fehler behoben`).
 - **Temporal Anti-Leakage Boundary:** Strict right-open temporal filtering ($ts < T$). Data recorded on or after decision Monday $T$ never participates in scoring.
 
 ---
@@ -62,7 +62,12 @@ lpdg-nexora-2026/
 │   ├── validation.py                   # Schema verification & validator wrapper
 │   ├── pipeline.py                     # Single-week engine & CLI orchestrator
 │   └── api.py                          # High-performance FastAPI REST service
-├── tests/                              # Automated regression test suite (123 tests)
+├── frontend/                           # Evaluator demonstration UI (HTML/CSS/JS)
+│   ├── index.html                      # Semantic UI layout & status indicator
+│   ├── style.css                       # Minimal technical styling
+│   └── app.js                          # Pure fetch client calling FastAPI backend
+├── tests/                              # Automated regression test suite (128 tests)
+│   ├── test_bug_regression.py          # Dedicated bug regression suite (Challenge requirement)
 │   ├── test_api.py                     # FastAPI core endpoints, lifecycle cache
 │   ├── test_api_errors.py              # HTTP error status codes, path leak prevention
 │   ├── test_data_loader.py             # File parsing, normalization, dedup
@@ -77,6 +82,9 @@ lpdg-nexora-2026/
 ├── reports/                            # Detailed phase engineering records
 ├── baseline_3sigma.py                  # Challenge reference baseline script
 ├── validate_submission.py              # Official challenge submission validator
+├── Makefile                            # One-command execution harness (make run, test, api)
+├── Dockerfile                          # Isolated container build
+├── docker-compose.yml                  # Container volume mount execution (docker compose up)
 ├── pyproject.toml                      # Standard package configuration & dependencies
 ├── pytest.ini                          # Test configuration (pythonpath = src)
 ├── predictions.csv                     # Validated 120-row submission artifact
@@ -124,16 +132,31 @@ $env:PYTHONPATH = "src"
 
 ## 7. One-Command Production Execution
 
-Execute the authoritative production pipeline from the project root:
+The challenge brief requires:
+> *"It runs with one command on a computer that is not yours. docker compose up, make run, or whatever you prefer, reading the data from a folder called data."*
 
+NEXORA supports all standard execution workflows out of the box:
+
+### Option A: Via `make run` (Recommended)
+```bash
+make run
+```
+
+### Option B: Via `docker compose up` (Isolated container)
+Mounts `./data` into the container as a read-only volume and writes `predictions.csv` directly:
+```bash
+docker compose up
+```
+
+### Option C: Direct Python Module Invocation
 ```bash
 python -m nexora.pipeline --data data/ --out predictions.csv
 ```
 
 ### Execution Telemetry
-- **Runtime:** ~6.5 seconds on a standard developer machine.
-- **Telemetry Ingestion:** 1,426,840 records loaded and deduplicated in ~4.1s.
-- **Scoring & Ranking:** 8 competition weeks scored in ~1.1s (~141 ms/week).
+- **Runtime:** ~6.2 seconds on a standard developer machine.
+- **Telemetry Ingestion:** 1,426,840 records loaded and deduplicated in ~4.0s.
+- **Scoring & Ranking:** 8 competition weeks scored in ~1.0s (~125 ms/week).
 - **Output:** Writes exactly 120 rows to `predictions.csv`.
 - **Automated Validation:** Automatically executes `validate_submission.py` upon completion.
 
@@ -158,39 +181,87 @@ predictions.csv: OK
 
 ## 9. FastAPI REST Service (Part 2 — Software Development)
 
-NEXORA wraps the production prediction engine in a high-performance REST API:
+NEXORA wraps the production prediction engine in a high-performance, fully documented REST API strictly meeting the Challenge Brief specifications:
+> *"A web API: ask it for this week's 15; ask it why a particular gateway is where it is; tell it to run again. Enough documentation that someone could call your API without asking you."*
 
+Start the API service:
 ```bash
 uvicorn nexora.api:app --host 0.0.0.0 --port 8000
+# or via Makefile:
+make api
 ```
 
 ### Endpoints
-| Method | Path | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Healthcheck returning `{"status": "ok"}`. |
-| `GET` | `/predictions/{week_start}` | Returns 15 ranked predictions for a competition Monday (e.g. `2026-02-02`) in <200ms. |
-| `GET` | `/gateways/{gateway_id}` | Master asset metadata and active lifecycle evaluation for date $T$. |
-| `POST` | `/run` | Programmatic weekly prediction execution via JSON payload (`{"week_start": "2026-02-02"}`). |
-| `GET` | `/docs` | Interactive OpenAPI / Swagger documentation. |
+| Method | Path | Challenge Brief Requirement | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | DevOps / Health Monitoring | Liveness check returning `{"status": "ok"}`. |
+| `GET` | `/predictions` | *"ask it for this week's 15"* | Returns the 15 gateways to visit this week (defaults to latest competition week `2026-03-23`). |
+| `GET` | `/predictions/{week_start}` | Specific Monday recommendations | Returns 15 ranked predictions for a competition Monday (e.g. `2026-02-02`). |
+| `GET` | `/gateways/{gateway_id}/explanation` | *"ask it why a particular gateway is where it is"* | Returns rank, score, breach count, and observational reason for a gateway. |
+| `GET` | `/gateways/{gateway_id}` | Fleet Asset Inspection | Master asset metadata and lifecycle eligibility status at date $T$. |
+| `POST` | `/run` | *"tell it to run again"* | Dynamically reloads mounted data partitions and recomputes recommendations. |
+| `GET` | `/docs` | Self-Documenting Interface | Interactive OpenAPI / Swagger UI documentation. |
 
-The API and CLI pipeline share the exact same underlying `predict_week` engine, ensuring 100% bitwise parity.
+### API Quick-Start Cheat Sheet (`curl`)
+
+```bash
+# 1. Check health
+curl http://127.0.0.1:8000/health
+
+# 2. Ask for this week's 15 gateways
+curl http://127.0.0.1:8000/predictions
+
+# 3. Ask for a specific Monday's 15 gateways
+curl http://127.0.0.1:8000/predictions/2026-02-02
+
+# 4. Ask why a particular gateway is where it is
+curl "http://127.0.0.1:8000/gateways/0A2778A31BE3/explanation?week_start=2026-02-02"
+
+# 5. Tell it to run again (reloading dynamic data partitions)
+curl -X POST http://127.0.0.1:8000/run \
+     -H "Content-Type: application/json" \
+     -d '{"week_start": "2026-02-02"}'
+```
+
+### Web Demonstration Client (HTML/CSS/Vanilla JS)
+A zero-dependency, browser-based demonstration client is served directly by the backend:
+1. Start the API (`make api` or `uvicorn nexora.api:app --host 0.0.0.0 --port 8000`).
+2. Open your browser directly to:
+   ```
+   http://127.0.0.1:8000
+   ```
+   FastAPI automatically mounts and serves the evaluator interface at `/`, enabling live health checks, interactive week selection, Top-15 table rendering, and raw API payload inspection.
 
 ---
 
 ## 10. Automated Test Suite
 
-Run all 123 automated regression tests:
+The repository features comprehensive regression protection with **128 automated tests across 12 modules**:
 
 ```bash
-pytest -q
+pytest -v
+# or via Makefile:
+make test
 ```
 
 Expected output:
 ```
-123 passed in ~10s
+128 passed in ~9.5s
 ```
 
-The suite guarantees zero regression on scoring formulations, active fleet eligibility, Option B silent-gateway retention, deterministic sorting, API responses, and edge-case boundary errors.
+### Test Suite Structure
+- `tests/test_bug_regression.py`: **Dedicated bug regression suite** fulfilling the brief requirement: *"Include one test you wrote because you found a bug."* Tests duplicate scored records rejection, FastAPI lifespan state initialization, reason length limits, and API feature contracts.
+- `tests/test_api.py`: FastAPI endpoints, parameter validation, dataset isolation, and bitwise parity against `predict_week`.
+- `tests/test_api_errors.py`: HTTP status codes (400, 404, 405, 422) and path-leak prevention.
+- `tests/test_data_loader.py`: Telemetry parquet loading, Latin-1 parsing, deduplication.
+- `tests/test_eligibility.py`: Active lifecycle boundary evaluation ($installed \le T < decommissioned$).
+- `tests/test_scoring.py`: 3-sigma anomaly thresholding, sample standard deviation ($ddof=1$), zero-variance handling.
+- `tests/test_ranking.py`: Deterministic tie-breaking (score desc, gateway_id asc), Option B retention.
+- `tests/test_reasons.py`: Observational reason format and $\le 300$ character contract.
+- `tests/test_pipeline_regression.py`: End-to-end multi-week pipeline validation and bitwise determinism.
+- `tests/test_error_handling.py`: Boundary conditions, empty datasets, invalid types.
+- `tests/test_normalization.py`: Canonical 12-char hex identifier normalization.
+- `tests/test_strategy_integrity.py`: Verification that scoring formula matches approved Baseline_3Sigma.
 
 ---
 
