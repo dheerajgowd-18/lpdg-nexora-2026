@@ -276,8 +276,10 @@ def test_openapi_docs_registered(synthetic_client):
     assert resp_openapi.status_code == 200
     schema = resp_openapi.json()
     assert "/health" in schema["paths"]
+    assert "/predictions" in schema["paths"]
     assert "/predictions/{week_start}" in schema["paths"]
     assert "/gateways/{gateway_id}" in schema["paths"]
+    assert "/gateways/{gateway_id}/explanation" in schema["paths"]
     assert "/run" in schema["paths"]
 
 

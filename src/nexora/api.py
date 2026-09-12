@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -66,6 +68,16 @@ class GatewayResponse(BaseModel):
     is_eligible: bool | None = None
 
 
+class GatewayExplanationResponse(BaseModel):
+    """A gateway's selection status and explanation for one decision Monday."""
+    gateway_id: str
+    week_start: str
+    selected: bool
+    rank: int | None = None
+    score: float | None = None
+    reason: str
+
+
 class RunRequest(BaseModel):
     """Programmatic prediction execution request."""
     week_start: str = Field(..., description="Decision Monday date in YYYY-MM-DD format")
@@ -103,15 +115,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # 1. Initialize production DataLoader once
-        loader = DataLoader(data_dir=effective_data_dir)
-        master_df = loader.load_master()
-        telemetry_df = loader.load_telemetry()
-
-        # 2. Store in application state for concurrent endpoint access
-        app.state.loader = loader
-        app.state.master_df = master_df
-        app.state.telemetry_df = telemetry_df
+        _reload_data(app)
         yield
 
     app = FastAPI(
@@ -123,11 +127,36 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.data_dir = effective_data_dir
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health", response_model=HealthResponse, tags=["Monitoring"])
     def health_check() -> HealthResponse:
         """Liveness and health check endpoint."""
         return HealthResponse(status="ok")
+
+    @app.get(
+        "/predictions",
+        response_model=PredictionResponse,
+        tags=["Predictions"],
+        summary="Retrieve this week's 15 recommendations (or specified week)",
+    )
+    def get_current_predictions(
+        week_start: str | None = Query(
+            None,
+            description="Optional decision Monday date (YYYY-MM-DD). Defaults to latest scored week.",
+        ),
+    ) -> PredictionResponse:
+        """Ask for this week's 15 gateways to visit. Defaults to the latest competition Monday."""
+        target_week = week_start or SCORED_WEEKS[-1].isoformat()
+        return get_predictions(week_start=target_week)
 
     @app.get(
         "/predictions/{week_start}",
@@ -153,6 +182,55 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             predictions=records,
         )
 
+    @app.get(
+        "/gateways/{gateway_id}/explanation",
+        response_model=GatewayExplanationResponse,
+        tags=["Gateways"],
+        summary="Explain why a particular gateway is where it is (rank/score/reason)",
+    )
+    def get_gateway_explanation(
+        gateway_id: str = PathParam(..., description="12-character hexadecimal gateway identifier"),
+        week_start: str | None = Query(
+            None,
+            description="Optional decision Monday date (YYYY-MM-DD). Defaults to latest scored week.",
+        ),
+    ) -> GatewayExplanationResponse:
+        """Returns the selected rank, score, and reason explaining why a gateway is where it is."""
+        if not is_valid_gateway_id(gateway_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Malformed gateway ID: {gateway_id!r}. Expected 12-char hex string.",
+            )
+
+        canonical_id = normalize_gateway_id(gateway_id)
+        target_week = week_start or SCORED_WEEKS[-1].isoformat()
+        t_date = _parse_and_validate_monday(target_week)
+        master_df: pd.DataFrame = app.state.master_df
+        telemetry_df: pd.DataFrame = app.state.telemetry_df
+
+        if not (master_df["gateway_id"] == canonical_id).any():
+            raise HTTPException(status_code=404, detail=f"Unknown gateway ID: {canonical_id}")
+
+        predictions = predict_week(master_df, telemetry_df, t_date, top_k=VISITS_PER_WEEK)
+        match = predictions[predictions["gateway_id"] == canonical_id]
+        if match.empty:
+            return GatewayExplanationResponse(
+                gateway_id=canonical_id,
+                week_start=t_date.isoformat(),
+                selected=False,
+                reason="Not selected in this week's top-15 recommendations.",
+            )
+
+        row = match.iloc[0]
+        return GatewayExplanationResponse(
+            gateway_id=canonical_id,
+            week_start=t_date.isoformat(),
+            selected=True,
+            rank=int(row["rank"]),
+            score=float(row["score"]),
+            reason=str(row["reason"]),
+        )
+
     @app.post(
         "/run",
         response_model=PredictionResponse,
@@ -160,7 +238,8 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         summary="Execute prediction for a decision Monday",
     )
     def run_prediction(request: RunRequest) -> PredictionResponse:
-        """Programmatic prediction execution endpoint delegating to the production engine."""
+        """Reloads mounted data, then computes a current weekly recommendation list."""
+        _reload_data(app)
         return get_predictions(week_start=request.week_start)
 
     @app.get(
@@ -219,7 +298,27 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
             is_eligible=is_eligible,
         )
 
+    # Mount evaluator frontend interface if directory exists
+    frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
+    if frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
     return app
+
+
+def _reload_data(app: FastAPI) -> None:
+    """Reload challenge inputs and replace API state only after both loads succeed.
+
+    A fresh loader intentionally bypasses its per-instance cache. This lets POST /run
+    discover a new ``month=YYYY-MM`` partition added to the mounted data directory
+    while the API process remains running.
+    """
+    loader = DataLoader(data_dir=app.state.data_dir)
+    master_df = loader.load_master()
+    telemetry_df = loader.load_telemetry()
+    app.state.loader = loader
+    app.state.master_df = master_df
+    app.state.telemetry_df = telemetry_df
 
 
 # Module-level default application instance for uvicorn nexora.api:app
