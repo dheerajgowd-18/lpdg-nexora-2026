@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEXORA — Predictive Maintenance Recommendation Engine</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <h1 class="brand-title">NEXORA</h1>
+        <p class="brand-subtitle">Predictive Maintenance Recommendation Engine</p>
+      </div>
+      <div class="status-badge checking" id="apiStatusBadge" aria-live="polite">
+        <span class="status-dot"></span>
+        <span class="status-text" id="apiStatusText">CHECKING</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Introduction -->
+      <section class="intro-section">
+        <p class="intro-text">
+          Deterministic predictive-maintenance recommendations powered by the validated Baseline_3Sigma strategy.
+        </p>
+      </section>
+
+      <!-- Control Panel -->
+      <section class="control-panel" aria-label="Control Panel">
+        <div class="control-group">
+          <label for="weekSelect" class="control-label">Decision Week</label>
+          <div class="select-wrapper">
+            <select id="weekSelect" class="select-control" aria-describedby="weekHelp">
+              <option value="" disabled selected>Select a decision Monday...</option>
+              <option value="2026-02-02">2026-02-02 (Week 1)</option>
+              <option value="2026-02-09">2026-02-09 (Week 2)</option>
+              <option value="2026-02-16">2026-02-16 (Week 3)</option>
+              <option value="2026-02-23">2026-02-23 (Week 4)</option>
+              <option value="2026-03-02">2026-03-02 (Week 5)</option>
+              <option value="2026-03-09">2026-03-09 (Week 6)</option>
+              <option value="2026-03-16">2026-03-16 (Week 7)</option>
+              <option value="2026-03-23">2026-03-23 (Week 8)</option>
+            </select>
+          </div>
+        </div>
+        <div class="action-group">
+          <button id="generateBtn" type="button" class="btn-primary">Generate Recommendations</button>
+        </div>
+      </section>
+
+      <!-- Results Area -->
+      <section class="results-section" aria-label="Recommendations Section">
+        <div class="results-header">
+          <h2 class="results-title">Top 15 Recommendations</h2>
+          <span class="results-meta" id="resultsMeta"></span>
+        </div>
+
+        <!-- State 1: Empty State (Default) -->
+        <div id="emptyState" class="state-card">
+          <p class="state-message">Select a decision week to generate recommendations.</p>
+        </div>
+
+        <!-- State 2: Loading State -->
+        <div id="loadingState" class="state-card is-hidden" aria-live="assertive">
+          <div class="spinner" aria-hidden="true"></div>
+          <p class="state-message">Generating recommendations...</p>
+        </div>
+
+        <!-- State 3: Error State -->
+        <div id="errorState" class="state-card state-error is-hidden" role="alert">
+          <div class="error-header">
+            <span class="error-badge" id="errorBadge">API Error</span>
+            <span class="error-status" id="errorStatus"></span>
+          </div>
+          <p class="error-message" id="errorMessage"></p>
+          <p class="error-detail" id="errorDetail"></p>
+        </div>
+
+        <!-- State 4: Recommendations Table -->
+        <div id="tableContainer" class="table-container is-hidden">
+          <div class="table-scroll">
+            <table class="recommendations-table" aria-label="Top 15 Ranked Gateways">
+              <thead>
+                <tr>
+                  <th scope="col" class="th-rank">Rank</th>
+                  <th scope="col" class="th-gateway">Gateway ID</th>
+                  <th scope="col" class="th-score">Score</th>
+                  <th scope="col" class="th-reason">Reason</th>
+                </tr>
+              </thead>
+              <tbody id="recommendationsBody">
+                <!-- Dynamically populated from FastAPI JSON -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Raw API Response (Collapsible) -->
+      <section class="raw-response-section">
+        <details class="raw-details" id="rawDetails">
+          <summary class="raw-summary">
+            <span class="summary-title">View API Response</span>
+            <span class="summary-tag">JSON</span>
+          </summary>
+          <div class="raw-body">
+            <pre class="raw-code"><code id="rawResponseCode">No request sent yet. Select a decision week and click "Generate Recommendations".</code></pre>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <!-- Footer / API Information -->
+    <footer class="app-footer">
+      <div class="footer-item">
+        <span class="footer-label">Backend</span>
+        <span class="footer-value">FastAPI</span>
+      </div>
+      <span class="footer-sep">•</span>
+      <div class="footer-item">
+        <span class="footer-label">Prediction Engine</span>
+        <span class="footer-value">NEXORA</span>
+      </div>
+      <span class="footer-sep">•</span>
+      <div class="footer-item">
+        <span class="footer-label">Strategy</span>
+        <span class="footer-value">Baseline_3Sigma</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
