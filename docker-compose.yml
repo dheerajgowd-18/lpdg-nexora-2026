@@ -1,0 +1,23 @@
+services:
+  pipeline:
+    build: .
+    container_name: nexora-pipeline
+    volumes:
+      # Mount host data directory as read-only volume as instructed by Challenge Brief
+      - ./data:/app/data:ro
+      # Mount root so generated predictions.csv is written directly to host
+      - ./:/app/output
+    command: ["python", "-m", "nexora.pipeline", "--data", "/app/data", "--out", "/app/output/predictions.csv"]
+
+  api:
+    build: .
+    container_name: nexora-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data:ro
+    environment:
+      - NEXORA_DATA_DIR=/app/data
+    command: ["uvicorn", "nexora.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    profiles:
+      - api
