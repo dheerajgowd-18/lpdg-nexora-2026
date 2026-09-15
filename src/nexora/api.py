@@ -91,8 +91,16 @@ class RunRequest(BaseModel):
 # Lifespan Management
 # =============================================================================
 
+def _ensure_data_loaded(app: FastAPI) -> None:
+    """Ensures master and telemetry datasets are loaded into app.state."""
+    if not hasattr(app.state, "master_df") or not hasattr(app.state, "telemetry_df") or app.state.master_df is None:
+        _reload_data(app)
+
+
 def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> dt.date:
     """Parses date string and validates that it represents a supported decision Monday."""
+    if app is not None:
+        _ensure_data_loaded(app)
     try:
         t_date = dt.date.fromisoformat(week_start)
     except (ValueError, TypeError):
@@ -305,6 +313,7 @@ def create_app(
             )
 
         canonical_id = normalize_gateway_id(gateway_id)
+        _ensure_data_loaded(app)
         master_df: pd.DataFrame = app.state.master_df
 
         matched = master_df[master_df["gateway_id"] == canonical_id]
