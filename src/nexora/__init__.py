@@ -18,6 +18,12 @@ from .eligibility import get_eligible_gateways
 from .scoring import score_week
 from .ranking import rank_and_select
 from .reasons import generate_reason, add_reasons
+from .strategy import (
+    PredictionStrategy,
+    Baseline3SigmaStrategy,
+    PredictionService,
+    default_prediction_service,
+)
 from .validation import validate_predictions_df, run_official_validator
 
 
@@ -42,6 +48,10 @@ __all__ = [
     "run_official_validator",
     "predict_week",
     "run_pipeline",
+    "PredictionStrategy",
+    "Baseline3SigmaStrategy",
+    "PredictionService",
+    "default_prediction_service",
     "VISITS_PER_WEEK",
     "SCORED_WEEKS",
     "METRICS",

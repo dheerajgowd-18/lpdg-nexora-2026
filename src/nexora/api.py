@@ -30,7 +30,11 @@ from .config import (
 )
 from .data_loader import DataLoader, is_valid_gateway_id, normalize_gateway_id
 from .eligibility import get_eligible_gateways
-from .pipeline import predict_week
+from .strategy import (
+    PredictionStrategy,
+    PredictionService,
+    default_prediction_service,
+)
 
 
 # =============================================================================
@@ -127,8 +131,12 @@ def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> d
     )
 
 
-def create_app(data_dir: str | Path | None = None) -> FastAPI:
-    """Factory creating the FastAPI application with configurable data directory."""
+def create_app(
+    data_dir: str | Path | None = None,
+    prediction_service: PredictionService | None = None,
+    strategy: PredictionStrategy | None = None,
+) -> FastAPI:
+    """Factory creating the FastAPI application with configurable data directory and strategy."""
     effective_data_dir = Path(data_dir or os.getenv("NEXORA_DATA_DIR", "data"))
 
     @asynccontextmanager
@@ -146,6 +154,12 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.data_dir = effective_data_dir
+    if prediction_service is not None:
+        app.state.prediction_service = prediction_service
+    elif strategy is not None:
+        app.state.prediction_service = PredictionService(strategy=strategy)
+    else:
+        app.state.prediction_service = default_prediction_service
 
     app.add_middleware(
         CORSMiddleware,
@@ -190,8 +204,13 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         master_df: pd.DataFrame = app.state.master_df
         telemetry_df: pd.DataFrame = app.state.telemetry_df
 
-        # Call existing production prediction engine
-        preds_df = predict_week(master_df, telemetry_df, t_date, top_k=VISITS_PER_WEEK)
+        # Call active prediction service (strategy pattern)
+        preds_df = app.state.prediction_service.predict(
+            master_df=master_df,
+            telemetry_df=telemetry_df,
+            decision_monday=t_date,
+            top_k=VISITS_PER_WEEK,
+        )
 
         records = [Prediction(**row) for row in preds_df.to_dict(orient="records")]
         return PredictionResponse(
@@ -229,7 +248,12 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         if not (master_df["gateway_id"] == canonical_id).any():
             raise HTTPException(status_code=404, detail=f"Unknown gateway ID: {canonical_id}")
 
-        predictions = predict_week(master_df, telemetry_df, t_date, top_k=VISITS_PER_WEEK)
+        predictions = app.state.prediction_service.predict(
+            master_df=master_df,
+            telemetry_df=telemetry_df,
+            decision_monday=t_date,
+            top_k=VISITS_PER_WEEK,
+        )
         match = predictions[predictions["gateway_id"] == canonical_id]
         if match.empty:
             return GatewayExplanationResponse(

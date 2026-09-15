@@ -35,6 +35,11 @@ from .eligibility import get_eligible_gateways
 from .scoring import score_week
 from .ranking import rank_and_select
 from .reasons import add_reasons
+from .strategy import (
+    PredictionStrategy,
+    PredictionService,
+    default_prediction_service,
+)
 from .validation import validate_predictions_df, run_official_validator
 
 
@@ -43,50 +48,29 @@ def predict_week(
     telemetry_df: pd.DataFrame,
     decision_monday: dt.date | dt.datetime | str,
     top_k: int = VISITS_PER_WEEK,
+    strategy: PredictionStrategy | None = None,
 ) -> pd.DataFrame:
     """Computes Top-K predictive maintenance recommendations for a single decision Monday.
 
-    Executes core scoring & ranking stages (5 to 11):
-    - Evaluates fleet lifecycle eligibility at T
-    - Computes Baseline_3Sigma breach scores over [T-28d, T) and [T-7d, T)
-    - Retains eligible silent gateways under Option B (score 0.0, no bonus)
-    - Sorts deterministically (score DESC, gateway_id ASC)
-    - Selects Top-K assets with ranks 1..K
-    - Generates observational, non-causal explanation reasons
+    Delegates to the active PredictionStrategy (defaulting to Baseline_3Sigma).
 
     Parameters:
         master_df: Ingested and normalized gateway_master DataFrame.
         telemetry_df: Ingested and deduplicated telemetry DataFrame.
         decision_monday: Cutoff Monday date (date, datetime, or ISO string).
         top_k: Recommendation list capacity (default 15).
+        strategy: Optional strategy implementation (defaults to Baseline_3Sigma).
 
     Returns:
         DataFrame with columns ['week_start', 'rank', 'gateway_id', 'score', 'reason'].
     """
-    if isinstance(decision_monday, str):
-        t_date = dt.date.fromisoformat(decision_monday)
-    elif isinstance(decision_monday, dt.datetime):
-        t_date = decision_monday.date()
-    elif isinstance(decision_monday, dt.date):
-        t_date = decision_monday
-    else:
-        raise TypeError(f"Unsupported decision_monday type: {type(decision_monday)}")
-
-    # 1. Lifecycle eligibility
-    eligible_ids = get_eligible_gateways(master_df, t_date)
-
-    # 2. Temporal cutoff & Baseline_3Sigma scoring
-    scored_df = score_week(telemetry_df, t_date)
-
-    # 3. Silent gateway alignment, deterministic ranking, Top-K selection
-    top_df = rank_and_select(scored_df, eligible_ids, top_k=top_k)
-
-    # 4. Reason generation
-    top_df = add_reasons(top_df)
-
-    # 5. Schema formatting
-    top_df["week_start"] = t_date.isoformat()
-    return top_df[REQUIRED_PREDICTION_COLUMNS].copy()
+    svc = PredictionService(strategy=strategy) if strategy is not None else default_prediction_service
+    return svc.predict(
+        master_df=master_df,
+        telemetry_df=telemetry_df,
+        decision_monday=decision_monday,
+        top_k=top_k,
+    )
 
 
 def run_pipeline(
@@ -94,6 +78,7 @@ def run_pipeline(
     out_path: str | Path = "predictions.csv",
     scored_weeks: Sequence[dt.date] = SCORED_WEEKS,
     run_validator: bool = True,
+    strategy: PredictionStrategy | None = None,
 ) -> pd.DataFrame:
     """Executes the authoritative NEXORA 2026 Part 1 production pipeline.
 
@@ -105,6 +90,7 @@ def run_pipeline(
         out_path: Path to output predictions.csv.
         scored_weeks: List of decision Mondays to evaluate (default: 8 competition weeks).
         run_validator: Whether to execute validate_submission.py upon completion.
+        strategy: Optional ranking strategy (defaults to Baseline_3Sigma).
 
     Returns:
         The generated predictions DataFrame.
@@ -139,7 +125,7 @@ def run_pipeline(
 
     for idx, monday in enumerate(scored_weeks, 1):
         w_t0 = time.perf_counter()
-        week_df = predict_week(master_df, telemetry_df, monday, top_k=VISITS_PER_WEEK)
+        week_df = predict_week(master_df, telemetry_df, monday, top_k=VISITS_PER_WEEK, strategy=strategy)
         weekly_frames.append(week_df)
         w_time = time.perf_counter() - w_t0
         print(f"  Week {idx}/{len(scored_weeks)} [{monday}]: Top-{len(week_df)} selected ({w_time:.2f}s)")

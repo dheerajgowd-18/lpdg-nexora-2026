@@ -42,6 +42,26 @@ Following 26 weeks of historical backtesting (`DECISIONS.md`), **`Baseline_3Sigm
 6. **Deterministic Tie-Breaking:** Gateways are sorted by `score` **descending**, then `gateway_id` **ascending** (canonical lexicographical hex order). Top 15 are extracted.
 7. **Observational Reason Generation:** Conforms strictly to $\le 300$ characters without unsupported physical claims (e.g. blown fuse, hardware failure).
 
+### 3.1 Swappable Strategy Abstraction (Area B)
+
+To fulfill the Area B software engineering requirement (*"Someone should be able to swap out how the ranking works without touching the API"*), ranking logic is decoupled via an explicit strategy abstraction (`src/nexora/strategy.py`):
+
+```
+    API / CLI Pipeline
+           ↓
+    PredictionService
+           ↓
+    PredictionStrategy (Protocol)
+           ↓
+    Baseline3SigmaStrategy (Selected Production Default)
+           ↓
+    Authoritative Scoring & Ranking Core (scoring.py, ranking.py, etc.)
+```
+
+- **Selected Production Strategy:** `Baseline_3Sigma` remains the frozen production strategy.
+- **Decoupled Interface:** The API and pipeline interact strictly with `PredictionService` through the `PredictionStrategy` protocol. The active strategy can be hot-swapped at runtime or injected at app creation without altering a single line of API endpoint code.
+- **Zero Algorithmic Change:** `Baseline3SigmaStrategy` delegates directly to the existing core modules (`scoring.py`, `ranking.py`, `eligibility.py`, `reasons.py`), ensuring zero code duplication and guaranteeing byte-for-byte reproducibility of `predictions.csv`.
+
 ---
 
 ## 4. Repository Structure
@@ -59,6 +79,7 @@ lpdg-nexora-2026/
 │   ├── scoring.py                      # Baseline_3Sigma 3-metric breach accumulator
 │   ├── ranking.py                      # Option B retention, Top-15 deterministic sorting
 │   ├── reasons.py                      # Compliant observational reason generation
+│   ├── strategy.py                     # Swappable PredictionStrategy & PredictionService
 │   ├── validation.py                   # Schema verification & validator wrapper
 │   ├── pipeline.py                     # Single-week engine & CLI orchestrator
 │   └── api.py                          # High-performance FastAPI REST service
@@ -66,7 +87,8 @@ lpdg-nexora-2026/
 │   ├── index.html                      # Semantic UI layout & status indicator
 │   ├── style.css                       # Minimal technical styling
 │   └── app.js                          # Pure fetch client calling FastAPI backend
-├── tests/                              # Automated regression test suite (128 tests)
+├── tests/                              # Automated regression test suite (135 tests)
+│   ├── test_strategy_abstraction.py    # Swappable strategy protocol & API decoupling
 │   ├── test_bug_regression.py          # Dedicated bug regression suite (Challenge requirement)
 │   ├── test_api.py                     # FastAPI core endpoints, lifecycle cache
 │   ├── test_api_errors.py              # HTTP error status codes, path leak prevention
