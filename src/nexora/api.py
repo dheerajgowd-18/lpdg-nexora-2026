@@ -87,8 +87,8 @@ class RunRequest(BaseModel):
 # Lifespan Management
 # =============================================================================
 
-def _parse_and_validate_monday(week_start: str) -> dt.date:
-    """Parses date string and validates that it represents a supported competition Monday."""
+def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> dt.date:
+    """Parses date string and validates that it represents a supported decision Monday."""
     try:
         t_date = dt.date.fromisoformat(week_start)
     except (ValueError, TypeError):
@@ -97,16 +97,34 @@ def _parse_and_validate_monday(week_start: str) -> dt.date:
             detail=f"Invalid date format: {week_start!r}. Expected YYYY-MM-DD.",
         )
 
-    if t_date not in SCORED_WEEKS:
-        valid_options = [w.isoformat() for w in SCORED_WEEKS]
+    if t_date.weekday() != 0:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"Unsupported week_start: {week_start}. "
-                f"Must be one of the 8 scored competition Mondays: {valid_options}"
-            ),
+            detail=f"Unsupported week_start: {week_start}. Must be a Monday.",
         )
-    return t_date
+
+    # Scored competition weeks are always supported
+    if t_date in SCORED_WEEKS:
+        return t_date
+
+    # Dynamic extension: support any Monday backed by loaded telemetry (e.g. unseen month in live session)
+    if app is not None and hasattr(app.state, "telemetry_df"):
+        telemetry_df: pd.DataFrame = app.state.telemetry_df
+        if not telemetry_df.empty and "ts" in telemetry_df.columns:
+            min_ts = telemetry_df["ts"].min().date()
+            max_ts = telemetry_df["ts"].max().date()
+            # If date falls within available data horizon (allowing up to 7d after last recorded telemetry)
+            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
+                return t_date
+
+    valid_options = [w.isoformat() for w in SCORED_WEEKS]
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"Unsupported week_start: {week_start}. "
+            f"Must be one of the 8 scored competition Mondays: {valid_options}"
+        ),
+    )
 
 
 def create_app(data_dir: str | Path | None = None) -> FastAPI:
@@ -168,7 +186,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
         week_start: str = PathParam(..., description="Decision Monday date (YYYY-MM-DD)"),
     ) -> PredictionResponse:
         """Computes and returns the 15 gateways most worth visiting for the specified Monday."""
-        t_date = _parse_and_validate_monday(week_start)
+        t_date = _parse_and_validate_monday(week_start, app=app)
         master_df: pd.DataFrame = app.state.master_df
         telemetry_df: pd.DataFrame = app.state.telemetry_df
 
@@ -204,7 +222,7 @@ def create_app(data_dir: str | Path | None = None) -> FastAPI:
 
         canonical_id = normalize_gateway_id(gateway_id)
         target_week = week_start or SCORED_WEEKS[-1].isoformat()
-        t_date = _parse_and_validate_monday(target_week)
+        t_date = _parse_and_validate_monday(target_week, app=app)
         master_df: pd.DataFrame = app.state.master_df
         telemetry_df: pd.DataFrame = app.state.telemetry_df
 
