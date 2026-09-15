@@ -30,6 +30,18 @@ const DOM = {
   // Controls
   weekSelect: document.getElementById("weekSelect"),
   generateBtn: document.getElementById("generateBtn"),
+  runAgainBtn: document.getElementById("runAgainBtn"),
+
+  // Banners & Inspection
+  reloadBanner: document.getElementById("reloadBanner"),
+  reloadBannerDesc: document.getElementById("reloadBannerDesc"),
+  explanationCard: document.getElementById("explanationCard"),
+  explainGatewayId: document.getElementById("explainGatewayId"),
+  explainRank: document.getElementById("explainRank"),
+  explainScore: document.getElementById("explainScore"),
+  explainSelected: document.getElementById("explainSelected"),
+  explainReason: document.getElementById("explainReason"),
+  closeExplainBtn: document.getElementById("closeExplainBtn"),
 
   // Results & States
   resultsMeta: document.getElementById("resultsMeta"),
@@ -79,7 +91,7 @@ function setApiStatus(state) {
 }
 
 /**
- * Updates button label and interactive state.
+ * Updates button labels and interactive state.
  * @param {"idle" | "loading" | "retry"} state
  */
 function setButtonState(state) {
@@ -91,16 +103,19 @@ function setButtonState(state) {
     case "loading":
       DOM.generateBtn.disabled = true;
       DOM.generateBtn.textContent = "Loading...";
+      if (DOM.runAgainBtn) DOM.runAgainBtn.disabled = true;
       break;
     case "retry":
       DOM.generateBtn.disabled = false;
       DOM.generateBtn.textContent = "Retry";
       DOM.generateBtn.classList.add("btn-retry");
+      if (DOM.runAgainBtn) DOM.runAgainBtn.disabled = false;
       break;
     case "idle":
     default:
       DOM.generateBtn.disabled = false;
       DOM.generateBtn.textContent = "Generate Recommendations";
+      if (DOM.runAgainBtn) DOM.runAgainBtn.disabled = false;
       break;
   }
 }
@@ -252,6 +267,70 @@ async function fetchPredictions(weekStart) {
   }
 }
 
+/**
+ * Executes POST /run on the production FastAPI backend.
+ * Reloads mounted data partitions from disk and recomputes recommendations.
+ * @param {string} weekStart ISO Monday date (YYYY-MM-DD)
+ * @returns {Promise<{ ok: boolean, status: number, data: any, errorText?: string }>}
+ */
+async function postRunPrediction(weekStart) {
+  const endpoint = `${API_BASE_URL}/run`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ week_start: weekStart }),
+    });
+
+    clearTimeout(timeoutId);
+    const json = await res.json().catch(() => null);
+
+    if (res.ok && json) {
+      return { ok: true, status: res.status, data: json };
+    }
+
+    let detail = "An unexpected error occurred while executing POST /run.";
+    if (json && json.detail) {
+      if (typeof json.detail === "string") {
+        detail = json.detail;
+      } else if (Array.isArray(json.detail)) {
+        detail = json.detail.map((d) => d.msg || JSON.stringify(d)).join("; ");
+      }
+    }
+
+    return {
+      ok: false,
+      status: res.status,
+      data: json || { status: res.status, statusText: res.statusText },
+      errorText: detail,
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const isTimeout = err.name === "AbortError";
+    const errorText = isTimeout
+      ? `POST /run timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`
+      : `Unable to reach NEXORA API at ${API_BASE_URL}. Ensure the service is running.`;
+
+    return {
+      ok: false,
+      status: 0,
+      data: {
+        error: isTimeout ? "TimeoutError" : "NetworkError",
+        message: errorText,
+        targetUrl: endpoint,
+      },
+      errorText,
+    };
+  }
+}
+
 // =============================================================================
 // Rendering Engine
 // =============================================================================
@@ -294,12 +373,49 @@ function renderRecommendationsTable(predictions) {
     tdReason.textContent = String(row.reason);
     tr.appendChild(tdReason);
 
+    // 5. Inspect / Explain Action
+    const tdAction = document.createElement("td");
+    tdAction.className = "td-action";
+    const inspectBtn = document.createElement("button");
+    inspectBtn.type = "button";
+    inspectBtn.className = "btn-inspect";
+    inspectBtn.textContent = "Explain";
+    inspectBtn.title = `Explain why gateway ${row.gateway_id} was selected`;
+    inspectBtn.addEventListener("click", () => handleInspectClick(row.gateway_id));
+    tdAction.appendChild(inspectBtn);
+    tr.appendChild(tdAction);
+
     DOM.recommendationsBody.appendChild(tr);
   });
 }
 
 /**
- * Handles the "Generate Recommendations" button click workflow.
+ * Queries GET /gateways/{id}/explanation and populates the inspection card.
+ * @param {string} gatewayId
+ */
+async function handleInspectClick(gatewayId) {
+  const selectedWeek = DOM.weekSelect && DOM.weekSelect.value ? DOM.weekSelect.value : "2026-02-02";
+  const endpoint = `${API_BASE_URL}/gateways/${encodeURIComponent(gatewayId)}/explanation?week_start=${encodeURIComponent(selectedWeek)}`;
+
+  try {
+    const res = await fetch(endpoint);
+    const data = await res.json();
+    if (res.ok && data) {
+      if (DOM.explainGatewayId) DOM.explainGatewayId.textContent = data.gateway_id;
+      if (DOM.explainRank) DOM.explainRank.textContent = data.rank !== null ? `#${data.rank}` : "Unranked";
+      if (DOM.explainScore) DOM.explainScore.textContent = data.score !== null ? Number(data.score).toFixed(1) : "0.0";
+      if (DOM.explainSelected) DOM.explainSelected.textContent = data.selected ? "YES (Top 15)" : "NO";
+      if (DOM.explainReason) DOM.explainReason.textContent = data.reason || "No explanation provided.";
+      if (DOM.explanationCard) DOM.explanationCard.classList.remove("is-hidden");
+      DOM.explanationCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  } catch (err) {
+    console.error("Failed to fetch gateway explanation:", err);
+  }
+}
+
+/**
+ * Handles the "Generate Recommendations" button click workflow (GET /predictions/{week}).
  */
 async function handleGenerateClick() {
   const selectedWeek = DOM.weekSelect ? DOM.weekSelect.value : "";
@@ -311,6 +427,9 @@ async function handleGenerateClick() {
     }
     return;
   }
+
+  if (DOM.reloadBanner) DOM.reloadBanner.classList.add("is-hidden");
+  if (DOM.explanationCard) DOM.explanationCard.classList.add("is-hidden");
 
   // Set UI to loading state
   setButtonState("loading");
@@ -360,6 +479,65 @@ async function handleGenerateClick() {
   }
 }
 
+/**
+ * Handles the "Run Again (POST /run)" button click workflow.
+ * Triggers backend partition reloading from disk and fresh recommendation calculation.
+ */
+async function handleRunAgainClick() {
+  const selectedWeek = DOM.weekSelect && DOM.weekSelect.value ? DOM.weekSelect.value : "2026-02-02";
+
+  if (DOM.reloadBanner) DOM.reloadBanner.classList.add("is-hidden");
+  if (DOM.explanationCard) DOM.explanationCard.classList.add("is-hidden");
+
+  setButtonState("loading");
+  switchUiState("loading");
+  if (DOM.resultsMeta) DOM.resultsMeta.textContent = "";
+
+  const result = await postRunPrediction(selectedWeek);
+  setRawResponse(result.data);
+
+  if (result.ok && result.data && Array.isArray(result.data.predictions)) {
+    setApiStatus("online");
+    renderRecommendationsTable(result.data.predictions);
+
+    if (DOM.resultsMeta) {
+      DOM.resultsMeta.textContent = `Week: ${result.data.week_start} • ${result.data.count} Gateways Ranked (Live POST /run Reload)`;
+    }
+
+    if (DOM.reloadBanner) {
+      if (DOM.reloadBannerDesc) {
+        DOM.reloadBannerDesc.textContent = `Data partitions reloaded from mounted volume; fresh recommendations computed for ${result.data.week_start}.`;
+      }
+      DOM.reloadBanner.classList.remove("is-hidden");
+    }
+
+    switchUiState("table");
+    setButtonState("idle");
+  } else {
+    if (result.status === 0) {
+      setApiStatus("offline");
+      if (DOM.errorBadge) DOM.errorBadge.textContent = "Network Error";
+      if (DOM.errorStatus) DOM.errorStatus.textContent = "Connection Refused";
+      if (DOM.errorMessage) DOM.errorMessage.textContent = result.errorText;
+      if (DOM.errorDetail) {
+        DOM.errorDetail.textContent =
+          "Verify the backend server is running: uvicorn nexora.api:app --host 0.0.0.0 --port 8000";
+      }
+    } else {
+      if (DOM.errorBadge) DOM.errorBadge.textContent = `HTTP ${result.status}`;
+      if (DOM.errorStatus) DOM.errorStatus.textContent = `Status ${result.status}`;
+      if (DOM.errorMessage) DOM.errorMessage.textContent = result.errorText;
+      if (DOM.errorDetail) {
+        DOM.errorDetail.textContent =
+          "POST /run failed. Check server logs or request payload.";
+      }
+    }
+
+    switchUiState("error");
+    setButtonState("retry");
+  }
+}
+
 // =============================================================================
 // Application Initialization
 // =============================================================================
@@ -375,6 +553,16 @@ document.addEventListener("DOMContentLoaded", () => {
   // 3. Event Listeners
   if (DOM.generateBtn) {
     DOM.generateBtn.addEventListener("click", handleGenerateClick);
+  }
+
+  if (DOM.runAgainBtn) {
+    DOM.runAgainBtn.addEventListener("click", handleRunAgainClick);
+  }
+
+  if (DOM.closeExplainBtn) {
+    DOM.closeExplainBtn.addEventListener("click", () => {
+      if (DOM.explanationCard) DOM.explanationCard.classList.add("is-hidden");
+    });
   }
 
   if (DOM.weekSelect) {

@@ -47,9 +47,47 @@
           </div>
         </div>
         <div class="action-group">
-          <button id="generateBtn" type="button" class="btn-primary">Generate Recommendations</button>
+          <button id="generateBtn" type="button" class="btn-primary" title="Fetch recommendations via GET /predictions/{week}">Generate Recommendations</button>
+          <button id="runAgainBtn" type="button" class="btn-secondary" title="Tell pipeline to reload data from disk and re-score via POST /run">
+            <span class="btn-icon">↻</span> Run Again (POST /run)
+          </button>
         </div>
       </section>
+
+      <!-- Reload Notification Banner -->
+      <div id="reloadBanner" class="reload-banner is-hidden" role="status">
+        <span class="banner-icon">⚡</span>
+        <div class="banner-content">
+          <strong class="banner-title" id="reloadBannerTitle">POST /run Executed</strong>
+          <span class="banner-desc" id="reloadBannerDesc">Data partitions reloaded from disk and fresh recommendations computed.</span>
+        </div>
+      </div>
+
+      <!-- Explanation Card (Triggered by Inspect / Why is it here?) -->
+      <div id="explanationCard" class="explanation-card is-hidden">
+        <div class="explanation-header">
+          <span class="explanation-badge">Gateway Inspection</span>
+          <span class="explanation-id" id="explainGatewayId"></span>
+          <button id="closeExplainBtn" class="close-explain-btn" type="button" title="Close">×</button>
+        </div>
+        <div class="explanation-body">
+          <div class="explain-grid">
+            <div class="explain-item">
+              <span class="explain-label">Rank</span>
+              <span class="explain-val" id="explainRank">-</span>
+            </div>
+            <div class="explain-item">
+              <span class="explain-label">Breach Score</span>
+              <span class="explain-val" id="explainScore">-</span>
+            </div>
+            <div class="explain-item">
+              <span class="explain-label">Selected in Top 15</span>
+              <span class="explain-val" id="explainSelected">-</span>
+            </div>
+          </div>
+          <p class="explain-reason" id="explainReason"></p>
+        </div>
+      </div>
 
       <!-- Results Area -->
       <section class="results-section" aria-label="Recommendations Section">
@@ -89,6 +127,7 @@
                   <th scope="col" class="th-gateway">Gateway ID</th>
                   <th scope="col" class="th-score">Score</th>
                   <th scope="col" class="th-reason">Reason</th>
+                  <th scope="col" class="th-action">Inspect</th>
                 </tr>
               </thead>
               <tbody id="recommendationsBody">
