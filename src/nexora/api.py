@@ -25,6 +25,9 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from .config import (
+    FIRST_SCORED_MONDAY,
+    BASELINE_DAYS,
+    RECENT_DAYS,
     MAX_REASON_CHARS,
     SCORED_WEEKS,
     VISITS_PER_WEEK,
@@ -99,56 +102,87 @@ def _ensure_data_loaded(app: FastAPI) -> None:
         _reload_data(app)
 
 
+def is_monday_scoreable(t_date: dt.date, telemetry_df: pd.DataFrame | None) -> bool:
+    """Checks whether a Monday can be legitimately scored by Baseline_3Sigma using pre-T data.
+
+    Enforces strict right-open anti-leakage: ts < T (no future telemetry allowed).
+    Requires sufficient pre-T observations in:
+    - Trailing 28-day baseline window [T-28d, T)
+    - Trailing 7-day recent evaluation window [T-7d, T)
+    """
+    if t_date.weekday() != 0:
+        return False
+    if telemetry_df is None or telemetry_df.empty or "ts" not in telemetry_df.columns:
+        return False
+
+    end = pd.Timestamp(t_date, tz="UTC")
+    # Strict anti-leakage boundary: data on or after T cannot be used
+    pre_t = telemetry_df[telemetry_df["ts"] < end]
+    if pre_t.empty:
+        return False
+
+    baseline_start = end - dt.timedelta(days=BASELINE_DAYS)  # T - 28d
+    recent_start = end - dt.timedelta(days=RECENT_DAYS)      # T - 7d
+
+    has_baseline = (pre_t["ts"] >= baseline_start).any()
+    has_recent = (pre_t["ts"] >= recent_start).any()
+
+    return bool(has_baseline and has_recent)
+
+
 def _is_monday_supported(t_date: dt.date, telemetry_df: pd.DataFrame | None) -> bool:
-    """Checks whether a Monday is supported either as a scored week or via unseen telemetry."""
+    """Checks whether a Monday is supported either as an authoritative scored week or via scoreable unseen telemetry."""
+    if t_date.weekday() != 0:
+        return False
+
+    # Dates prior to the competition horizon are never supported
+    if t_date < FIRST_SCORED_MONDAY:
+        return False
+
+    # If telemetry is empty/unloaded in test fixtures, authoritative competition calendar is supported under Option B
+    if telemetry_df is None or telemetry_df.empty:
+        return t_date in SCORED_WEEKS
+
+    # Authoritative competition Mondays with pre-T telemetry
     if t_date in SCORED_WEEKS:
-        return True
-    if telemetry_df is not None and not telemetry_df.empty and "ts" in telemetry_df.columns:
-        min_ts = telemetry_df["ts"].min().date()
-        max_ts = telemetry_df["ts"].max().date()
-        # Case 1: Unseen month data extending beyond standard competition horizon
-        if max_ts > dt.date(2026, 3, 31):
-            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
-                return True
-        # Case 2: Synthetic test environment whose date range is entirely outside SCORED_WEEKS
-        data_overlaps_scored = any(min_ts <= w <= max_ts + dt.timedelta(days=7) for w in SCORED_WEEKS)
-        if not data_overlaps_scored:
-            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
-                return True
-    return False
+        return is_monday_scoreable(t_date, telemetry_df) or (
+            (telemetry_df["ts"] < pd.Timestamp(t_date, tz="UTC")).any()
+        )
+
+    # Beyond SCORED_WEEKS (e.g. unseen months): strictly require legitimate pre-T scoreability
+    return is_monday_scoreable(t_date, telemetry_df)
 
 
 def _get_latest_available_week(app: FastAPI) -> dt.date:
-    """Determines the latest available decision Monday from loaded data and competition weeks."""
+    """Determines the latest available decision Monday that the predictor can legitimately score using pre-T data."""
     _ensure_data_loaded(app)
     if hasattr(app.state, "telemetry_df") and app.state.telemetry_df is not None:
         telemetry_df: pd.DataFrame = app.state.telemetry_df
         if not telemetry_df.empty and "ts" in telemetry_df.columns:
             max_ts = telemetry_df["ts"].max().date()
-            # If telemetry extends past the standard competition period (unseen month)
+
+            # Case 1: Unseen month data extending beyond standard competition horizon
             if max_ts > dt.date(2026, 3, 31):
-                curr = SCORED_WEEKS[-1] + dt.timedelta(days=7)
-                latest_unseen: dt.date | None = None
-                while curr - dt.timedelta(days=1) <= max_ts:
-                    if curr.weekday() == 0:
-                        latest_unseen = curr
-                    curr += dt.timedelta(days=7)
-                if latest_unseen is not None:
-                    return latest_unseen
+                candidate = max_ts + dt.timedelta(days=7)
+                candidate_monday = candidate - dt.timedelta(days=candidate.weekday())
+                while candidate_monday > SCORED_WEEKS[-1]:
+                    if is_monday_scoreable(candidate_monday, telemetry_df):
+                        return candidate_monday
+                    candidate_monday -= dt.timedelta(days=7)
 
-            # If telemetry is within standard competition period
-            covered_scored = [w for w in SCORED_WEEKS if w - dt.timedelta(days=1) <= max_ts]
-            if covered_scored:
-                return max(covered_scored)
+            # Case 2: Standard competition dataset or historical partition subset
+            scoreable_scored = [w for w in SCORED_WEEKS if is_monday_scoreable(w, telemetry_df)]
+            if scoreable_scored:
+                return max(scoreable_scored)
 
-            # Synthetic dataset outside SCORED_WEEKS
+            # Case 3: Synthetic test environment whose date range is entirely outside SCORED_WEEKS
+            candidate = max_ts + dt.timedelta(days=7)
+            candidate_monday = candidate - dt.timedelta(days=candidate.weekday())
             min_ts = telemetry_df["ts"].min().date()
-            if max_ts >= min_ts:
-                candidate = max_ts
-                while candidate >= min_ts:
-                    if candidate.weekday() == 0:
-                        return candidate
-                    candidate -= dt.timedelta(days=1)
+            while candidate_monday >= min_ts:
+                if is_monday_scoreable(candidate_monday, telemetry_df):
+                    return candidate_monday
+                candidate_monday -= dt.timedelta(days=7)
 
     return SCORED_WEEKS[-1]
 

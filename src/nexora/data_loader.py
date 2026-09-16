@@ -146,7 +146,8 @@ class DataLoader:
         """Loads and deduplicates telemetry across monthly Parquet partitions.
 
         Deduplication rule:
-            telemetry.drop_duplicates(subset=["gateway_id", "ts_utc"], keep="first")
+            Deterministic deduplication on (gateway_id, normalized UTC timestamp 'ts', and measurement values),
+            followed by fail-fast conflict detection on canonical logical key (gateway_id, ts).
 
         Preserves timestamps as timezone-aware UTC in 'ts'.
         Optionally filters out telemetry for gateways not present in gateway_master.csv.
@@ -208,21 +209,25 @@ class DataLoader:
         # Normalize IDs
         combined["gateway_id"] = combined["gateway_id"].apply(normalize_gateway_id)
 
-        # Parse UTC timestamp
+        # Parse UTC timestamp into canonical normalized UTC 'ts'
         combined["ts"] = pd.to_datetime(combined["ts_utc"], utc=True, errors="coerce")
         if combined["ts"].isna().any():
-            raise ValueError("telemetry partition contains null or unparseable timestamps in 'ts_utc'.")
+            # Fall back to mixed format inference for heterogeneous string formats (e.g. ISO-8601 vs space vs offset)
+            combined["ts"] = pd.to_datetime(combined["ts_utc"], utc=True, format="mixed", errors="coerce")
+            if combined["ts"].isna().any():
+                raise ValueError("telemetry partition contains null or unparseable timestamps in 'ts_utc'.")
 
-        # 1. Exact deduplication on all loaded columns (identical duplicates safely collapsed)
-        combined = combined.drop_duplicates()
+        # 1. Deterministic deduplication of identical observations using (gateway_id, ts) and measurement values
+        measurement_cols = [c for c in combined.columns if c not in ("gateway_id", "ts", "ts_utc")]
+        combined = combined.drop_duplicates(subset=["gateway_id", "ts"] + measurement_cols)
 
-        # 2. Conflicting duplicates check on logical key (gateway_id, ts_utc)
-        conflicting = combined[combined.duplicated(subset=["gateway_id", "ts_utc"], keep=False)]
+        # 2. Conflicting duplicates check on canonical logical key (gateway_id, ts)
+        conflicting = combined[combined.duplicated(subset=["gateway_id", "ts"], keep=False)]
         if not conflicting.empty:
             first_bad = conflicting.iloc[0]
             raise ValueError(
                 f"Conflicting telemetry duplicates detected for gateway '{first_bad['gateway_id']}' "
-                f"at timestamp '{first_bad['ts_utc']}' with differing measurement values."
+                f"at normalized UTC timestamp '{first_bad['ts']}' with differing measurement values."
             )
 
         # Unknown gateway filtering

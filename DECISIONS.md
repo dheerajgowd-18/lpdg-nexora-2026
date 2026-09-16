@@ -75,7 +75,7 @@ We chose **Area B — Software Development**. We wrapped the verified predictive
   - `GET /gateways/{gateway_id}`: retrieve master asset metadata and dynamic lifecycle eligibility.
   - `POST /run`: tell it to run again (reloads mounted data partitions and recomputes recommendations).
   - `GET /health`: liveness probe.
-- Comprehensive regression protection (182 automated tests across 14 modules, including dedicated bug regression suite `tests/test_bug_regression.py` and data contract suite `tests/test_data_contracts.py`).
+- Comprehensive regression protection (186 automated tests across 14 modules, including dedicated bug regression suite `tests/test_bug_regression.py` and data contract suite `tests/test_data_contracts.py`).
 - Explicit error handling rejecting corrupt schemas, bad dates, duplicate records, and out-of-bounds inputs.
 - Clean one-command execution via standard packaging (`pyproject.toml`), `Makefile` (`make run`), and `docker-compose.yml` (`docker compose up`).
 
@@ -187,5 +187,5 @@ The repository maintains four dedicated bug regression tests in `tests/test_bug_
 - **Part 1 — Requirement 3 (DECISIONS.md):** This document.
 - **Part 1 — Requirement 4 (What It Cannot Do):** Documented extensively in `README.md` Section 12 ("What It Cannot Do & Operational Limitations" and "What Another Two Weeks Would Fix").
 - **Part 1 — Requirement 5 (AI-USAGE.md):** Full disclosure in `AI-USAGE.md`.
-- **Part 2 — Area B (Software Development):** Production FastAPI service in `src/nexora/api.py`, 182 automated tests in `tests/`, clean decoupled architecture, and interactive demo frontend in `frontend/`.
+- **Part 2 — Area B (Software Development):** Production FastAPI service in `src/nexora/api.py`, 186 automated tests in `tests/`, clean decoupled architecture, and interactive demo frontend in `frontend/`.
 

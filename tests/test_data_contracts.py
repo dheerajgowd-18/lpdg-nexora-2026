@@ -468,3 +468,133 @@ def test_contract_temporal_leakage_meter_boundary(tmp_path):
     assert visible_reads.iloc[0]["week_start"] == "2026-02-02"
     assert "2026-02-09" not in visible_reads["week_start"].values
     assert "2026-02-16" not in visible_reads["week_start"].values
+
+
+# =============================================================================
+# 13. Normalized UTC Timestamp Deduplication & Conflict Contracts (FIX 1)
+# =============================================================================
+
+def test_contract_normalized_timestamp_duplicate_identical_collapsed(tmp_path):
+    """Different raw string formats representing the same UTC instant are collapsed if measurements match."""
+    data_dir = tmp_path / "data"
+    t_dir = data_dir / "telemetry" / "month=2026-02"
+    t_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {
+            "gateway_id": "001A7D000001",
+            "ts_utc": "2026-02-01T10:00:00Z",       # ISO-8601 UTC
+            "offline_duration_sec": 10.0,
+            "disconnection_cnt": 1.0,
+            "reboot_cnt": 0.0,
+        },
+        {
+            "gateway_id": "001A7D000001",
+            "ts_utc": "2026-02-01 11:00:00+01:00",  # +01:00 offset (same UTC instant 10:00:00Z)
+            "offline_duration_sec": 10.0,            # IDENTICAL measurements
+            "disconnection_cnt": 1.0,
+            "reboot_cnt": 0.0,
+        },
+    ]).to_parquet(t_dir / "part-0.parquet")
+
+    loader = DataLoader(data_dir=data_dir)
+    df = loader.load_telemetry(filter_known_gateways=False)
+    assert len(df) == 1, "Identical observations at same UTC instant must collapse to 1 row"
+    assert df.iloc[0]["gateway_id"] == "001A7D000001"
+    assert df.iloc[0]["offline_duration_sec"] == 10.0
+
+
+def test_contract_normalized_timestamp_duplicate_conflicting_raises(tmp_path):
+    """Different raw string formats representing the same UTC instant with differing values raise ValueError."""
+    data_dir = tmp_path / "data"
+    t_dir = data_dir / "telemetry" / "month=2026-02"
+    t_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {
+            "gateway_id": "001A7D000001",
+            "ts_utc": "2026-02-01T10:00:00Z",       # ISO-8601 UTC
+            "offline_duration_sec": 10.0,
+            "disconnection_cnt": 1.0,
+            "reboot_cnt": 0.0,
+        },
+        {
+            "gateway_id": "001A7D000001",
+            "ts_utc": "2026-02-01 11:00:00+01:00",  # Same UTC instant
+            "offline_duration_sec": 999.0,           # CONFLICTING value
+            "disconnection_cnt": 50.0,
+            "reboot_cnt": 2.0,
+        },
+    ]).to_parquet(t_dir / "part-0.parquet")
+
+    loader = DataLoader(data_dir=data_dir)
+    with pytest.raises(ValueError, match="Conflicting telemetry duplicates detected"):
+        loader.load_telemetry(filter_known_gateways=False)
+
+
+# =============================================================================
+# 14. Dynamic Pre-T Scoreability & Week Support Contracts (FIX 2)
+# =============================================================================
+
+def test_contract_is_monday_scoreable_requires_pre_t_windows():
+    """is_monday_scoreable requires telemetry in pre-T [T-28d, T) and [T-7d, T)."""
+    from nexora.api import is_monday_scoreable
+
+    target_monday = dt.date(2026, 4, 27)
+
+    # 1. Telemetry strictly in the future relative to T (temporal leakage attempt)
+    future_telem = pd.DataFrame([
+        {"gateway_id": "001A7D000001", "ts": pd.Timestamp("2026-04-27 00:00:00", tz="UTC")},
+        {"gateway_id": "001A7D000001", "ts": pd.Timestamp("2026-04-28 12:00:00", tz="UTC")},
+    ])
+    assert not is_monday_scoreable(target_monday, future_telem)
+
+    # 2. Telemetry too stale (ends before T - 7d, so [T-7d, T) is empty)
+    stale_telem = pd.DataFrame([
+        {"gateway_id": "001A7D000001", "ts": pd.Timestamp("2026-04-10 12:00:00", tz="UTC")},
+    ])
+    assert not is_monday_scoreable(target_monday, stale_telem)
+
+    # 3. Valid pre-T telemetry covering baseline and recent evaluation windows
+    valid_telem = pd.DataFrame([
+        # In baseline window [2026-03-30, 2026-04-27)
+        {"gateway_id": "001A7D000001", "ts": pd.Timestamp("2026-04-05 12:00:00", tz="UTC")},
+        # In recent window [2026-04-20, 2026-04-27)
+        {"gateway_id": "001A7D000001", "ts": pd.Timestamp("2026-04-26 12:00:00", tz="UTC")},
+    ])
+    assert is_monday_scoreable(target_monday, valid_telem)
+
+    # 4. Non-Monday dates are never scoreable
+    assert not is_monday_scoreable(dt.date(2026, 4, 28), valid_telem)  # Tuesday
+
+
+def test_contract_insufficient_pre_t_telemetry_returns_404(tmp_path):
+    """API returns 404 for a Monday whose pre-T recent window has insufficient telemetry."""
+    from fastapi.testclient import TestClient
+    from nexora.api import create_app
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    pd.DataFrame([{
+        "gateway_id": "001A7D000001",
+        "installed_on": "2025-01-01",
+        "decommissioned_on": None,
+        "region": "Nord",
+    }]).to_csv(data_dir / "gateway_master.csv", index=False)
+
+    # Telemetry only through April 10 (insufficient for April 27)
+    t_dir = data_dir / "telemetry" / "month=2026-04"
+    t_dir.mkdir(parents=True)
+    pd.DataFrame([{
+        "gateway_id": "001A7D000001",
+        "ts_utc": "2026-04-10 12:00:00",
+        "offline_duration_sec": 10.0,
+        "disconnection_cnt": 1.0,
+        "reboot_cnt": 0.0,
+    }]).to_parquet(t_dir / "part-0.parquet")
+
+    app = create_app(data_dir=data_dir)
+    with TestClient(app) as client:
+        # April 27 has zero data in its recent window [2026-04-20, 2026-04-27)
+        resp = client.get("/predictions/2026-04-27")
+        assert resp.status_code == 404
+        assert "Unsupported week_start" in resp.json()["detail"]
+

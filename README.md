@@ -258,7 +258,7 @@ A zero-dependency, browser-based demonstration client is served directly by the 
 
 ## 10. Automated Test Suite
 
-The repository features comprehensive regression protection with **182 automated tests across 14 modules**:
+The repository features comprehensive regression protection with **186 automated tests across 14 modules**:
 
 ```bash
 pytest -v
@@ -268,7 +268,7 @@ make test
 
 Expected output:
 ```
-182 passed in ~43s
+186 passed in ~70s
 ```
 
 ### Test Suite Structure
