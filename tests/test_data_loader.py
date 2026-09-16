@@ -123,13 +123,13 @@ def synthetic_data_dir(tmp_path):
             "disconnection_cnt": 2.0,
             "reboot_cnt": 1.0,
         },
-        # Exact duplicate of Record 1 on (gateway_id, ts_utc)
+        # Exact identical duplicate of Record 1 on (gateway_id, ts_utc)
         {
             "gateway_id": "00:1A:7D:00:00:01",  # colon format of same gateway
             "ts_utc": "2026-02-01 10:00:00",
-            "offline_duration_sec": 999.0,      # should be discarded by keep='first'
-            "disconnection_cnt": 99.0,
-            "reboot_cnt": 99.0,
+            "offline_duration_sec": 100.0,      # identical values collapsed cleanly
+            "disconnection_cnt": 2.0,
+            "reboot_cnt": 1.0,
         },
         # Record 2 for same gateway at different timestamp
         {

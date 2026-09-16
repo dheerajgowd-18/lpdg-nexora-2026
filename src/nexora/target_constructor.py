@@ -28,6 +28,34 @@ class TargetConstructor:
         "UNOBSERVED",
     ]
 
+    REQUIRED_FIELD_VISIT_COLUMNS = [
+        "visit_id",
+        "gateway_id",
+        "requested_on",
+        "visited_on",
+        "reason_reported",
+        "outcome",
+    ]
+
+    VALID_OUTCOMES = {
+        "Fehler behoben",
+        "Kein Fehler gefunden",
+        "Kein Zugang",
+    }
+
+    REQUIRED_ENGINEER_REVIEW_COLUMNS = [
+        "gateway_id",
+        "standort",
+        "Kategorie",
+        "reviewed_on",
+        "reviewer",
+    ]
+
+    VALID_KATEGORIEN = {
+        "Normal",
+        "Schlecht",
+    }
+
     def __init__(self, data_loader: DataLoader | None = None, data_dir: str | Path = "data") -> None:
         self.loader = data_loader or DataLoader(data_dir=data_dir)
         self.data_dir = self.loader.data_dir
@@ -35,7 +63,7 @@ class TargetConstructor:
         self._engineer_review_df: pd.DataFrame | None = None
 
     def load_field_visits(self) -> pd.DataFrame:
-        """Loads and canonicalizes field_visits.csv.
+        """Loads, validates, and canonicalizes field_visits.csv.
         Columns:
             visit_id, gateway_id (normalized), requested_on, visited_on,
             req_dt, vis_dt, reason_reported, outcome, parts_replaced, technician_hours
@@ -44,16 +72,49 @@ class TargetConstructor:
             return self._visits_df.copy()
 
         path = self.data_dir / "field_visits.csv"
+        if not path.exists():
+            raise FileNotFoundError(f"field_visits.csv not found at {path.resolve()}")
+
         df = pd.read_csv(path)
+
+        missing = [col for col in self.REQUIRED_FIELD_VISIT_COLUMNS if col not in df.columns]
+        if missing:
+            raise ValueError(f"field_visits.csv missing required column(s): {missing}")
+
         df["gateway_id_raw"] = df["gateway_id"]
         df["gateway_id"] = df["gateway_id"].apply(normalize_gateway_id)
-        df["req_dt"] = pd.to_datetime(df["requested_on"], utc=True)
-        df["vis_dt"] = pd.to_datetime(df["visited_on"], utc=True)
+
+        # Parse and validate dates
+        df["req_dt"] = pd.to_datetime(df["requested_on"], utc=True, errors="coerce")
+        df["vis_dt"] = pd.to_datetime(df["visited_on"], utc=True, errors="coerce")
+        if df["req_dt"].isna().any() or df["vis_dt"].isna().any():
+            raise ValueError("field_visits.csv contains null or unparseable dates in requested_on/visited_on.")
+
+        # Temporal ordering contract: work orders cannot be visited before they were requested
+        if (df["req_dt"] > df["vis_dt"]).any():
+            invalid = df[df["req_dt"] > df["vis_dt"]].iloc[0]
+            raise ValueError(
+                f"field_visits.csv contains invalid chronology for visit '{invalid['visit_id']}': "
+                f"requested_on ({invalid['requested_on']}) > visited_on ({invalid['visited_on']})."
+            )
+
+        # Validate outcome vocabulary
+        invalid_outcomes = set(df["outcome"].dropna().astype(str)) - self.VALID_OUTCOMES
+        if invalid_outcomes:
+            raise ValueError(f"field_visits.csv contains invalid outcome(s): {invalid_outcomes}")
+
+        # Deduplication
+        df = df.drop_duplicates()
+        conflicts = df[df.duplicated(subset=["visit_id"], keep=False)]
+        if not conflicts.empty:
+            bad_id = conflicts.iloc[0]["visit_id"]
+            raise ValueError(f"Conflicting field visit records detected for visit_id '{bad_id}'.")
+
         self._visits_df = df
         return df.copy()
 
     def load_engineer_review(self) -> pd.DataFrame:
-        """Loads and canonicalizes engineer_review_2026-02.xlsx.
+        """Loads, validates, and canonicalizes engineer_review_2026-02.xlsx.
         Review Date: Strictly 2026-02-15.
         Columns: gateway_id (normalized), standort, Kategorie, reviewed_on, reviewer, Bemerkung
         """
@@ -61,10 +122,34 @@ class TargetConstructor:
             return self._engineer_review_df.copy()
 
         path = self.data_dir / "engineer_review_2026-02.xlsx"
+        if not path.exists():
+            raise FileNotFoundError(f"engineer_review_2026-02.xlsx not found at {path.resolve()}")
+
         df = pd.read_excel(path)
+
+        missing = [col for col in self.REQUIRED_ENGINEER_REVIEW_COLUMNS if col not in df.columns]
+        if missing:
+            raise ValueError(f"engineer_review_2026-02.xlsx missing required column(s): {missing}")
+
         df["gateway_id_raw"] = df["gateway_id"]
         df["gateway_id"] = df["gateway_id"].apply(normalize_gateway_id)
-        df["reviewed_on_dt"] = pd.to_datetime(df["reviewed_on"], utc=True)
+
+        df["reviewed_on_dt"] = pd.to_datetime(df["reviewed_on"], utc=True, errors="coerce")
+        if df["reviewed_on_dt"].isna().any():
+            raise ValueError("engineer_review_2026-02.xlsx contains null or unparseable dates in 'reviewed_on'.")
+
+        # Validate Kategorie vocabulary
+        invalid_kats = set(df["Kategorie"].dropna().astype(str)) - self.VALID_KATEGORIEN
+        if invalid_kats:
+            raise ValueError(f"engineer_review_2026-02.xlsx contains invalid Kategorie: {invalid_kats}")
+
+        # Deduplication
+        df = df.drop_duplicates()
+        conflicts = df[df.duplicated(subset=["gateway_id"], keep=False)]
+        if not conflicts.empty:
+            bad_id = conflicts.iloc[0]["gateway_id"]
+            raise ValueError(f"Conflicting engineer review records detected for gateway '{bad_id}'.")
+
         self._engineer_review_df = df
         return df.copy()
 

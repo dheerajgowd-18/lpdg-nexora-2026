@@ -130,6 +130,48 @@ def test_bug_regression_reason_string_length_within_limit():
 
 
 # =============================================================================
+# BUG 4: SyntheticFakeStrategy Non-Unique Gateway IDs via Slicing Truncation
+# =============================================================================
+
+def test_bug_regression_synthetic_strategy_generates_strictly_unique_ids():
+    """BUG REGRESSION TEST: Synthetic strategy must generate strictly unique gateway IDs.
+
+    Discovered during Task 1 (Strategy Abstraction):
+    A test mock strategy attempted to create 12-character hex gateway IDs using:
+        f"0080E1FFFFFF{i:02X}"[:12]
+    Because the prefix '0080E1FFFFFF' was already 12 characters long, slicing [:12]
+    truncated the variable index suffix '{i:02X}', causing all 15 synthetic rows
+    to receive the identical gateway ID '0080E1FFFFFF'.
+
+    When plugged into the API, this triggered downstream validation errors
+    ("duplicate gateway IDs detected").
+
+    The fix:
+    Format IDs using f"0080E1{i:06X}" ensuring 12 characters with unique suffixes,
+    and assert strictly unique gateway IDs.
+    """
+    try:
+        from test_strategy_abstraction import SyntheticFakeStrategy
+    except ImportError:
+        from tests.test_strategy_abstraction import SyntheticFakeStrategy
+
+    strategy = SyntheticFakeStrategy()
+    mock_master = pd.DataFrame([
+        {"gateway_id": f"0080E1{i:06X}", "installed_on": "2025-01-01", "decommissioned_on": None, "region": "North"}
+        for i in range(1, 25)
+    ])
+    mock_telem = pd.DataFrame(columns=["gateway_id", "ts_utc", "offline_duration_sec", "disconnection_cnt", "reboot_cnt"])
+
+    preds = strategy.predict(mock_master, mock_telem, dt.date(2026, 2, 2), top_k=15)
+
+    assert len(preds) == 15
+    assert len(set(preds["gateway_id"])) == 15, "Synthetic strategy must produce exactly 15 distinct gateway IDs"
+    assert list(preds["rank"]) == list(range(1, 16)), "Ranks must be contiguous 1..15"
+    for gid in preds["gateway_id"]:
+        assert len(gid) == 12, f"Gateway ID '{gid}' must be exactly 12 characters"
+
+
+# =============================================================================
 # CHALLENGE FEATURE: Web API Requirements
 # =============================================================================
 

@@ -33,11 +33,15 @@ def normalize_gateway_id(gateway_id: str) -> str:
         '0639ea5602c1'      -> '0639EA5602C1'
 
     Raises:
-        ValueError: If gateway_id cannot be normalized to a 12-character hex string.
+        ValueError: If gateway_id is null, empty, or cannot be normalized to a 12-character hex string.
     """
+    if gateway_id is None or pd.isna(gateway_id):
+        raise ValueError("Gateway ID cannot be null or NaN.")
     if not isinstance(gateway_id, str):
         gateway_id = str(gateway_id)
     text = gateway_id.strip()
+    if not text:
+        raise ValueError("Gateway ID cannot be empty.")
     if BARE_HEX_REGEX.match(text):
         return text.upper()
     if COLON_HEX_REGEX.match(text):
@@ -70,9 +74,9 @@ class DataLoader:
         """Loads and normalizes gateway_master.csv.
 
         Note: Uses encoding='latin1' to handle German umlauts/special characters safely.
-        Validates required columns, canonicalizes gateway_id, and parses lifecycle dates
-        into timezone-aware UTC timestamps ('installed_on_dt', 'decommissioned_on_dt')
-        alongside backward-compatible date aliases ('installed_on_date', 'decommissioned_on_date').
+        Validates required columns, canonicalizes gateway_id, enforces lifecycle integrity
+        (installed_on <= decommissioned_on), and parses lifecycle dates into timezone-aware
+        UTC timestamps ('installed_on_dt', 'decommissioned_on_dt').
         """
         if self._master_df is not None:
             return self._master_df.copy()
@@ -89,12 +93,42 @@ class DataLoader:
 
         df["gateway_id_raw"] = df["gateway_id"]
         df["gateway_id"] = df["gateway_id"].apply(normalize_gateway_id)
-        df["installed_on_dt"] = pd.to_datetime(df["installed_on"], utc=True)
 
+        # Disallow duplicate gateway registrations in master asset register
+        dup_gateways = df[df.duplicated(subset=["gateway_id"], keep=False)]
+        if not dup_gateways.empty:
+            raise ValueError(f"gateway_master.csv contains duplicate gateway ID: '{dup_gateways.iloc[0]['gateway_id']}'.")
+
+        # Parse installed_on
+        raw_installed = df["installed_on"].astype(str).str.strip()
+        if (raw_installed == "").any() or df["installed_on"].isna().any():
+            raise ValueError("gateway_master.csv contains null or empty 'installed_on' dates.")
+        df["installed_on_dt"] = pd.to_datetime(df["installed_on"], utc=True, errors="coerce")
+        if df["installed_on_dt"].isna().any():
+            raise ValueError("gateway_master.csv contains unparseable dates in 'installed_on'.")
+
+        # Parse decommissioned_on if present
         if "decommissioned_on" in df.columns:
+            raw_decomm = df["decommissioned_on"].dropna().astype(str).str.strip()
+            raw_decomm_nonempty = raw_decomm[raw_decomm != ""]
+            if not raw_decomm_nonempty.empty:
+                test_parsed = pd.to_datetime(raw_decomm_nonempty, utc=True, errors="coerce")
+                if test_parsed.isna().any():
+                    raise ValueError("gateway_master.csv contains unparseable dates in 'decommissioned_on'.")
             df["decommissioned_on_dt"] = pd.to_datetime(df["decommissioned_on"], utc=True)
         else:
-            df["decommissioned_on_dt"] = pd.NaT
+            df["decommissioned_on_dt"] = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns, UTC]")
+
+        # Lifecycle validity: installed_on <= decommissioned_on where both exist
+        both_mask = df["installed_on_dt"].notna() & df["decommissioned_on_dt"].notna()
+        if both_mask.any():
+            invalid_lifecycle = df[both_mask & (df["installed_on_dt"] > df["decommissioned_on_dt"])]
+            if not invalid_lifecycle.empty:
+                bad_row = invalid_lifecycle.iloc[0]
+                raise ValueError(
+                    f"gateway_master.csv contains invalid lifecycle for gateway '{bad_row['gateway_id']}': "
+                    f"installed_on ({bad_row['installed_on']}) > decommissioned_on ({bad_row['decommissioned_on']})."
+                )
 
         # Backward-compatible date-only aliases
         df["installed_on_date"] = df["installed_on_dt"].dt.date
@@ -175,12 +209,21 @@ class DataLoader:
         combined["gateway_id"] = combined["gateway_id"].apply(normalize_gateway_id)
 
         # Parse UTC timestamp
-        combined["ts"] = pd.to_datetime(combined["ts_utc"], utc=True)
+        combined["ts"] = pd.to_datetime(combined["ts_utc"], utc=True, errors="coerce")
         if combined["ts"].isna().any():
             raise ValueError("telemetry partition contains null or unparseable timestamps in 'ts_utc'.")
 
-        # Exact deduplication on (gateway_id, ts_utc)
-        combined = combined.drop_duplicates(subset=["gateway_id", "ts_utc"], keep="first")
+        # 1. Exact deduplication on all loaded columns (identical duplicates safely collapsed)
+        combined = combined.drop_duplicates()
+
+        # 2. Conflicting duplicates check on logical key (gateway_id, ts_utc)
+        conflicting = combined[combined.duplicated(subset=["gateway_id", "ts_utc"], keep=False)]
+        if not conflicting.empty:
+            first_bad = conflicting.iloc[0]
+            raise ValueError(
+                f"Conflicting telemetry duplicates detected for gateway '{first_bad['gateway_id']}' "
+                f"at timestamp '{first_bad['ts_utc']}' with differing measurement values."
+            )
 
         # Unknown gateway filtering
         if filter_known_gateways:
@@ -202,7 +245,9 @@ class DataLoader:
         Note: Research/backtesting infrastructure only. Not used in production predictions.
         Validates required columns: gateway_id, week_start, meters_expected, meters_read.
         Normalizes gateway_id to 12-character bare hex.
-        Parses week_start into timezone-aware UTC datetime column 'week_start_dt'.
+        Enforces Monday requirement on week_start.
+        Applies strict numeric integer validation on meter counts and verifies meters_read <= meters_expected.
+        Safely deduplicates identical rows while failing on conflicting logical duplicates.
         """
         if self._meter_reads_df is not None:
             return self._meter_reads_df.copy()
@@ -219,12 +264,52 @@ class DataLoader:
 
         df["gateway_id_raw"] = df["gateway_id"]
         df["gateway_id"] = df["gateway_id"].apply(normalize_gateway_id)
-        df["week_start_dt"] = pd.to_datetime(df["week_start"], utc=True)
+
+        # Validate and parse week_start
+        raw_week = df["week_start"].astype(str).str.strip()
+        if (raw_week == "").any() or df["week_start"].isna().any():
+            raise ValueError("meter_read_success.csv contains null or empty 'week_start' dates.")
+        df["week_start_dt"] = pd.to_datetime(df["week_start"], utc=True, errors="coerce")
         if df["week_start_dt"].isna().any():
             raise ValueError("meter_read_success.csv contains null or unparseable dates in 'week_start'.")
 
-        df["meters_expected"] = pd.to_numeric(df["meters_expected"], errors="coerce").fillna(0).astype(int)
-        df["meters_read"] = pd.to_numeric(df["meters_read"], errors="coerce").fillna(0).astype(int)
+        # Monday requirement: weekly reporting contract
+        if (df["week_start_dt"].dt.weekday != 0).any():
+            non_mondays = df[df["week_start_dt"].dt.weekday != 0]["week_start"].tolist()
+            raise ValueError(f"meter_read_success.csv contains non-Monday week_start: {non_mondays[:3]}")
+
+        # Strict numeric validation of meters_expected and meters_read
+        for col in ["meters_expected", "meters_read"]:
+            if df[col].isna().any():
+                raise ValueError(f"meter_read_success.csv contains null values in '{col}'.")
+            numeric_s = pd.to_numeric(df[col], errors="coerce")
+            if numeric_s.isna().any():
+                raise ValueError(f"meter_read_success.csv contains non-numeric values in '{col}'.")
+            if (numeric_s < 0).any():
+                raise ValueError(f"meter_read_success.csv contains negative values in '{col}'.")
+            if not (numeric_s == numeric_s.round()).all():
+                raise ValueError(f"meter_read_success.csv contains decimal values in integer column '{col}'.")
+            df[col] = numeric_s.astype(int)
+
+        # Invariant: meters_read cannot exceed meters_expected
+        invalid_ratio = df[df["meters_read"] > df["meters_expected"]]
+        if not invalid_ratio.empty:
+            bad = invalid_ratio.iloc[0]
+            raise ValueError(
+                f"meter_read_success.csv contains records where meters_read ({bad['meters_read']}) > "
+                f"meters_expected ({bad['meters_expected']}) for gateway '{bad['gateway_id']}' at '{bad['week_start']}'."
+            )
+
+        # Deduplication: identical duplicate records collapsed
+        df = df.drop_duplicates()
+
+        # Conflicting duplicates check on (gateway_id, week_start_dt)
+        conflicts = df[df.duplicated(subset=["gateway_id", "week_start_dt"], keep=False)]
+        if not conflicts.empty:
+            bad_row = conflicts.iloc[0]
+            raise ValueError(
+                f"Conflicting meter read duplicates detected for gateway '{bad_row['gateway_id']}' at week '{bad_row['week_start']}'."
+            )
 
         self._meter_reads_df = df
         return df.copy()

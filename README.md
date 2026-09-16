@@ -23,7 +23,7 @@ The challenge brief establishes strict technical and economic criteria:
 - **Submission Output:** Exactly $8 \times 15 = 120$ rows in `predictions.csv`.
 - **Schema Contract:** `week_start, rank, gateway_id, score, reason`.
 - **Validation:** Must pass the official grader harness `python validate_submission.py predictions.csv` with exit code `0`.
-- **Economic Cost Proxies:** Standardized decision-analysis penalties of **£380** for a false dispatch (`Kein Fehler gefunden`) and **£600/week** for an unaddressed defect (`Fehler behoben`).
+- **Economic Cost Proxies:** Standardized decision-analysis penalties of **€380** for a false dispatch (`Kein Fehler gefunden`) and **€600/week** for an unaddressed defect (`Fehler behoben`).
 - **Temporal Anti-Leakage Boundary:** Strict right-open temporal filtering ($ts < T$). Data recorded on or after decision Monday $T$ never participates in scoring.
 
 ---
@@ -258,7 +258,7 @@ A zero-dependency, browser-based demonstration client is served directly by the 
 
 ## 10. Automated Test Suite
 
-The repository features comprehensive regression protection with **128 automated tests across 12 modules**:
+The repository features comprehensive regression protection with **182 automated tests across 14 modules**:
 
 ```bash
 pytest -v
@@ -268,14 +268,15 @@ make test
 
 Expected output:
 ```
-128 passed in ~9.5s
+182 passed in ~43s
 ```
 
 ### Test Suite Structure
-- `tests/test_bug_regression.py`: **Dedicated bug regression suite** fulfilling the brief requirement: *"Include one test you wrote because you found a bug."* Tests duplicate scored records rejection, FastAPI lifespan state initialization, reason length limits, and API feature contracts.
+- `tests/test_bug_regression.py`: **Dedicated bug regression suite** fulfilling the brief requirement: *"Include one test you wrote because you found a bug."* Tests duplicate scored records rejection, FastAPI lifespan state initialization, reason length limits, synthetic mock gateway ID uniqueness, and API feature contracts.
+- `tests/test_data_contracts.py`: **Data contract suite** verifying fail-fast validation for missing columns, malformed/null IDs, integer counts, negative counts, $meters\_read \le meters\_expected$, conflicting duplicates, lifecycle chronology, and temporal anti-leakage.
 - `tests/test_api.py`: FastAPI endpoints, parameter validation, dataset isolation, and bitwise parity against `predict_week`.
-- `tests/test_api_errors.py`: HTTP status codes (400, 404, 405, 422) and path-leak prevention.
-- `tests/test_data_loader.py`: Telemetry parquet loading, Latin-1 parsing, deduplication.
+- `tests/test_strategy_abstraction.py`: Swappable ranking strategy interface (`PredictionStrategy`) and dynamic replacement.
+- `tests/test_data_loader.py`: Telemetry parquet loading, Latin-1 parsing, identical duplicate collapsing, conflicting duplicate detection.
 - `tests/test_eligibility.py`: Active lifecycle boundary evaluation ($installed \le T < decommissioned$).
 - `tests/test_scoring.py`: 3-sigma anomaly thresholding, sample standard deviation ($ddof=1$), zero-variance handling.
 - `tests/test_ranking.py`: Deterministic tie-breaking (score desc, gateway_id asc), Option B retention.
@@ -283,7 +284,8 @@ Expected output:
 - `tests/test_pipeline_regression.py`: End-to-end multi-week pipeline validation and bitwise determinism.
 - `tests/test_error_handling.py`: Boundary conditions, empty datasets, invalid types.
 - `tests/test_normalization.py`: Canonical 12-char hex identifier normalization.
-- `tests/test_strategy_integrity.py`: Verification that scoring formula matches approved Baseline_3Sigma.
+- `tests/test_target_constructor.py`: Validation of field visits and engineer review ground truth contracts.
+- `tests/test_backtest.py`: Historical backtesting and candidate ranking evaluation.
 
 ---
 
