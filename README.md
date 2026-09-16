@@ -6,6 +6,14 @@
 
 ---
 
+## Submission Demonstration
+
+A 6–8 minute technical demonstration covering the NEXORA solution, production pipeline, API, and representative result.
+
+[Watch the NEXORA 2026 submission recording](https://drive.google.com/file/d/1WYtKEgd1VSFYbtq8BMMKFEchxsAFdxBI/view?usp=sharing)
+
+---
+
 ## 1. What NEXORA Does
 
 LPDG operates a smart metering radio network of approximately 320 active LoRaWAN gateways across Germany, each relaying hourly telemetry for 40 to 900 downstream utility meters. When a gateway degrades or fails silently, connected meters cannot be billed automatically, requiring costly manual reads and causing customer disputes.
@@ -258,7 +266,7 @@ A zero-dependency, browser-based demonstration client is served directly by the 
 
 ## 10. Automated Test Suite
 
-The repository features comprehensive regression protection with **186 automated tests across 14 modules**:
+The repository features comprehensive regression protection with **186 automated tests across 16 test files**:
 
 ```bash
 pytest -v
@@ -268,14 +276,17 @@ make test
 
 Expected output:
 ```
-186 passed in ~70s
+186 passed in ~55s
 ```
 
 ### Test Suite Structure
 - `tests/test_bug_regression.py`: **Dedicated bug regression suite** fulfilling the brief requirement: *"Include one test you wrote because you found a bug."* Tests duplicate scored records rejection, FastAPI lifespan state initialization, reason length limits, synthetic mock gateway ID uniqueness, and API feature contracts.
 - `tests/test_data_contracts.py`: **Data contract suite** verifying fail-fast validation for missing columns, malformed/null IDs, integer counts, negative counts, `meters_read <= meters_expected`, conflicting duplicates, lifecycle chronology, and temporal anti-leakage.
 - `tests/test_api.py`: FastAPI endpoints, parameter validation, dataset isolation, and bitwise parity against `predict_week`.
+- `tests/test_api_errors.py`: HTTP error status codes (`400`, `404`, `405`) and host path sanitization.
+- `tests/test_api_live_hardening.py`: Unseen month live evaluation workflow, state reload isolation, and concurrency locks.
 - `tests/test_strategy_abstraction.py`: Swappable ranking strategy interface (`PredictionStrategy`) and dynamic replacement.
+- `tests/test_strategy_integrity.py`: Approved distress signal metrics set and unweighted breach accumulation.
 - `tests/test_data_loader.py`: Telemetry parquet loading, Latin-1 parsing, identical duplicate collapsing, conflicting duplicate detection.
 - `tests/test_eligibility.py`: Active lifecycle boundary evaluation (`installed_on <= T < decommissioned_on`).
 - `tests/test_scoring.py`: 3-sigma anomaly thresholding, sample standard deviation ($ddof=1$), zero-variance handling.

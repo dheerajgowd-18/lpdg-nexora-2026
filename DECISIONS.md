@@ -75,7 +75,7 @@ We chose **Area B — Software Development**. We wrapped the verified predictive
   - `GET /gateways/{gateway_id}`: retrieve master asset metadata and dynamic lifecycle eligibility.
   - `POST /run`: tell it to run again (reloads mounted data partitions and recomputes recommendations).
   - `GET /health`: liveness probe.
-- Comprehensive regression protection (186 automated tests across 14 modules, including dedicated bug regression suite `tests/test_bug_regression.py` and data contract suite `tests/test_data_contracts.py`).
+- Comprehensive regression protection (186 automated tests across 16 test files, including dedicated bug regression suite `tests/test_bug_regression.py` and data contract suite `tests/test_data_contracts.py`).
 - Explicit error handling rejecting corrupt schemas, bad dates, duplicate records, and out-of-bounds inputs.
 - Clean one-command execution via standard packaging (`pyproject.toml`), `Makefile` (`make run`), and `docker-compose.yml` (`docker compose up`).
 
