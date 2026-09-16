@@ -38,7 +38,7 @@ Following 26 weeks of historical backtesting (`DECISIONS.md`), **`Baseline_3Sigm
 2. **Zero-Variance & Insufficient Baseline Protection:** If historical baseline variance is zero ($\sigma = 0$) or observation count $N=1$, $\sigma$ is replaced with `NaN`, ensuring constant baselines produce zero false breaches ($x > \text{NaN} \to \text{False}$).
 3. **Trailing 7-Day Recent Evaluation Window $[T-7\text{d}, T)$:** Flags any hour where an individual metric strictly exceeds $\mu + 3\sigma$.
 4. **Unweighted Breach Accumulation:** Score equals the total sum of individual metric breaches across the 7-day window (each observation hour contributes 0, 1, 2, or 3 breaches).
-5. **Option B Silent-Gateway Retention:** Commissioned gateways with zero telemetry in the trailing 7 days are retained in the candidate pool with $score = 0.0$, $flagged\_hours = 0$, and $worst\_metric = \text{"no\_telemetry"}$.
+5. **Option B Silent-Gateway Retention:** Commissioned gateways with zero telemetry in the trailing 7 days are retained in the candidate pool with `score = 0.0`, `flagged_hours = 0`, and `worst_metric = "no_telemetry"`.
 6. **Deterministic Tie-Breaking:** Gateways are sorted by `score` **descending**, then `gateway_id` **ascending** (canonical lexicographical hex order). Top 15 are extracted.
 7. **Observational Reason Generation:** Conforms strictly to $\le 300$ characters without unsupported physical claims (e.g. blown fuse, hardware failure).
 
@@ -87,7 +87,7 @@ lpdg-nexora-2026/
 │   ├── index.html                      # Semantic UI layout & status indicator
 │   ├── style.css                       # Minimal technical styling
 │   └── app.js                          # Pure fetch client calling FastAPI backend
-├── tests/                              # Automated regression test suite (135 tests)
+├── tests/                              # Automated regression test suite (186 tests)
 │   ├── test_strategy_abstraction.py    # Swappable strategy protocol & API decoupling
 │   ├── test_bug_regression.py          # Dedicated bug regression suite (Challenge requirement)
 │   ├── test_api.py                     # FastAPI core endpoints, lifecycle cache
@@ -273,26 +273,25 @@ Expected output:
 
 ### Test Suite Structure
 - `tests/test_bug_regression.py`: **Dedicated bug regression suite** fulfilling the brief requirement: *"Include one test you wrote because you found a bug."* Tests duplicate scored records rejection, FastAPI lifespan state initialization, reason length limits, synthetic mock gateway ID uniqueness, and API feature contracts.
-- `tests/test_data_contracts.py`: **Data contract suite** verifying fail-fast validation for missing columns, malformed/null IDs, integer counts, negative counts, $meters\_read \le meters\_expected$, conflicting duplicates, lifecycle chronology, and temporal anti-leakage.
+- `tests/test_data_contracts.py`: **Data contract suite** verifying fail-fast validation for missing columns, malformed/null IDs, integer counts, negative counts, `meters_read <= meters_expected`, conflicting duplicates, lifecycle chronology, and temporal anti-leakage.
 - `tests/test_api.py`: FastAPI endpoints, parameter validation, dataset isolation, and bitwise parity against `predict_week`.
 - `tests/test_strategy_abstraction.py`: Swappable ranking strategy interface (`PredictionStrategy`) and dynamic replacement.
 - `tests/test_data_loader.py`: Telemetry parquet loading, Latin-1 parsing, identical duplicate collapsing, conflicting duplicate detection.
-- `tests/test_eligibility.py`: Active lifecycle boundary evaluation ($installed \le T < decommissioned$).
+- `tests/test_eligibility.py`: Active lifecycle boundary evaluation (`installed_on <= T < decommissioned_on`).
 - `tests/test_scoring.py`: 3-sigma anomaly thresholding, sample standard deviation ($ddof=1$), zero-variance handling.
 - `tests/test_ranking.py`: Deterministic tie-breaking (score desc, gateway_id asc), Option B retention.
-- `tests/test_reasons.py`: Observational reason format and $\le 300$ character contract.
+- `tests/test_reasons.py`: Observational reason format and `<= 300` character contract.
 - `tests/test_pipeline_regression.py`: End-to-end multi-week pipeline validation and bitwise determinism.
 - `tests/test_error_handling.py`: Boundary conditions, empty datasets, invalid types.
 - `tests/test_normalization.py`: Canonical 12-char hex identifier normalization.
-- `tests/test_target_constructor.py`: Validation of field visits and engineer review ground truth contracts.
-- `tests/test_backtest.py`: Historical backtesting and candidate ranking evaluation.
+- `tests/test_research_backtesting.py`: Validation of field visits, engineer review ground truth contracts, and historical backtesting.
 
 ---
 
 ## 11. Expected Output & Verified Checksum
 
 - **File:** `predictions.csv`
-- **Total Rows:** Exactly 120 rows ($8 \text{ weeks} \times 15 \text{ gateways}$).
+- **Total Rows:** Exactly 120 rows (8 weeks × 15 gateways).
 - **Columns:** `week_start, rank, gateway_id, score, reason`.
 - **Validated SHA-256 Checksum:**  
   `ec8489c8d9b4e64feb6ecc0635e6e32c77e1945818ffbb68ff8fe3bc7f415145`

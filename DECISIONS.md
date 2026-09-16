@@ -34,7 +34,7 @@ Composite candidates resulted in substantially higher net standardized economic 
 ## Decision 2: Silent-Gateway Policy — Option B (Universe Retention) vs. Option A (Disqualification) vs. Candidate F (+10 Bonus)
 
 ### What We Chose
-We implemented **Option B (Silent-Gateway Universe Retention)**. Any gateway commissioned and active in the master asset registry that produces zero telemetry in the trailing 7 days is retained in the candidate pool with $score = 0.0$, $flagged\_hours = 0$, and $worst\_metric = \text{"no\_telemetry"}$. Silent gateways participate in deterministic secondary tie-breaking by `gateway_id` ascending alongside other zero-breach assets.
+We implemented **Option B (Silent-Gateway Universe Retention)**. Any gateway commissioned and active in the master asset registry that produces zero telemetry in the trailing 7 days is retained in the candidate pool with `score = 0.0`, `flagged_hours = 0`, and `worst_metric = "no_telemetry"`. Silent gateways participate in deterministic secondary tie-breaking by `gateway_id` ascending alongside other zero-breach assets.
 
 ### What Else We Considered
 1. **Option A (Strict Disqualification):** Drop gateways with zero telemetry entirely from the candidate pool.
@@ -51,7 +51,7 @@ We implemented **Option B (Silent-Gateway Universe Retention)**. Any gateway com
 
 ### What We Chose
 We implemented explicit, date-aware lifecycle fleet gating using `gateway_master.csv`:
-$$\text{Eligible}(i, T) \iff \Big(\text{installed\_on}_i \le T\Big) \;\land\; \Big(\text{decommissioned\_on}_i > T \;\;\lor\;\;\text{decommissioned\_on}_i \text{ is null}\Big)$$
+$$\text{Eligible}(i, T) \iff \big(\text{installed}_i \le T\big) \land \big(\text{decommissioned}_i > T \lor \text{decommissioned}_i \text{ is null}\big)$$
 
 ### What Else We Considered
 Inferring the active candidate universe strictly from the gateways present in recent telemetry parquet partitions (the approach used in `baseline_3sigma.py`).
