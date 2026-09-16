@@ -92,13 +92,15 @@ class Baseline3SigmaStrategy:
             })
             ranked = pd.concat([ranked, missing_df], ignore_index=True)
 
-        # Invariant Assertions: Verify exact universe match
-        assert len(ranked) == len(feature_df), (
-            f"Baseline universe mismatch on {monday}: {len(ranked)} vs {len(feature_df)}"
-        )
-        assert set(ranked["gateway_id"]) == active_ids, (
-            f"Baseline gateway ID mismatch on {monday}"
-        )
+        # Invariant check: Verify exact universe match
+        if len(ranked) != len(feature_df):
+            raise ValueError(
+                f"Baseline universe mismatch on {monday}: {len(ranked)} vs {len(feature_df)}"
+            )
+        if set(ranked["gateway_id"]) != active_ids:
+            raise ValueError(
+                f"Baseline gateway ID mismatch on {monday}"
+            )
 
         # Deterministic sorting: flagged_hours descending, gateway_id ascending
         ranked = ranked.sort_values(

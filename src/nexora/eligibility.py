@@ -39,30 +39,18 @@ def get_eligible_gateways(
         raise TypeError(f"Unsupported decision_monday type: {type(decision_monday)}")
 
     df = master_df.copy()
-    if "installed_on_date" not in df.columns:
-        df["installed_on_date"] = pd.to_datetime(df["installed_on"]).dt.date
-    if "decommissioned_on_date" not in df.columns:
+    if "installed_on_dt" not in df.columns:
+        df["installed_on_dt"] = pd.to_datetime(df["installed_on"], utc=True)
+    if "decommissioned_on_dt" not in df.columns:
         if "decommissioned_on" in df.columns:
-            df["decommissioned_on_date"] = pd.to_datetime(df["decommissioned_on"]).dt.date
+            df["decommissioned_on_dt"] = pd.to_datetime(df["decommissioned_on"], utc=True)
         else:
-            df["decommissioned_on_date"] = pd.NaT
+            df["decommissioned_on_dt"] = pd.NaT
 
-    inst_series = df["installed_on_date"]
-    if pd.api.types.is_datetime64_any_dtype(inst_series):
-        is_installed = inst_series <= pd.Timestamp(target_date)
-    else:
-        is_installed = inst_series.apply(
-            lambda x: x <= target_date if (pd.notna(x) and x is not None) else False
-        )
-
-    decomm_series = df["decommissioned_on_date"]
-    if pd.api.types.is_datetime64_any_dtype(decomm_series):
-        is_decomm_after_target = decomm_series > pd.Timestamp(target_date)
-    else:
-        is_decomm_after_target = decomm_series.apply(
-            lambda x: x > target_date if (pd.notna(x) and x is not None) else False
-        )
-    is_not_decommissioned = decomm_series.isna() | is_decomm_after_target
+    T = pd.Timestamp(target_date, tz="UTC")
+    is_installed = df["installed_on_dt"] <= T
+    decomm_series = df["decommissioned_on_dt"]
+    is_not_decommissioned = decomm_series.isna() | (decomm_series > T)
 
     eligible_mask = is_installed & is_not_decommissioned
     eligible_df = df[eligible_mask]

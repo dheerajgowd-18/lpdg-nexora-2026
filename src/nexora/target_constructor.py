@@ -21,11 +21,16 @@ class TargetConstructor:
     and engineer reviews.
     """
 
-    TARGET_CATEGORIES = ["POSITIVE", "NEGATIVE", "NO_ACCESS", "UNOBSERVED"]
+    TARGET_CATEGORIES = [
+        "REPAIR_REQUIRED",
+        "FALSE_ALARM",
+        "INCONCLUSIVE",
+        "UNOBSERVED",
+    ]
 
     def __init__(self, data_loader: DataLoader | None = None, data_dir: str | Path = "data") -> None:
         self.loader = data_loader or DataLoader(data_dir=data_dir)
-        self.data_dir = Path(data_dir)
+        self.data_dir = self.loader.data_dir
         self._visits_df: pd.DataFrame | None = None
         self._engineer_review_df: pd.DataFrame | None = None
 
@@ -83,9 +88,9 @@ class TargetConstructor:
             - Physical visit timing sensitivity: filters strictly on visited_on in [T, T + outcome_window_days).
 
         Target Categories:
-            - POSITIVE: Eligible dispatch resulting in confirmed repair ('Fehler behoben').
-            - NEGATIVE: Eligible dispatch resulting in false alarm ('Kein Fehler gefunden').
-            - NO_ACCESS: Eligible dispatch resulting in access denied ('Kein Zugang').
+            - REPAIR_REQUIRED: Eligible dispatch resulting in confirmed repair ('Fehler behoben').
+            - FALSE_ALARM: Eligible dispatch resulting in false alarm ('Kein Fehler gefunden').
+            - INCONCLUSIVE: Eligible dispatch resulting in access denied ('Kein Zugang').
             - UNOBSERVED: No eligible dispatch was initiated in the window.
               (Crucial Invariant: UNOBSERVED != healthy!).
 

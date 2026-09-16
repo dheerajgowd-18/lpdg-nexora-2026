@@ -88,10 +88,11 @@ class HistoricalBacktester:
                     week_start=monday_str,
                     k_cap=15,
                 )
-                assert w_metrics["total_repairs"] == w_target_repairs, (
-                    f"Target mismatch for strategy {strat.name} on {monday_str}: "
-                    f"{w_metrics['total_repairs']} vs {w_target_repairs}"
-                )
+                if w_metrics["total_repairs"] != w_target_repairs:
+                    raise ValueError(
+                        f"Target mismatch for strategy {strat.name} on {monday_str}: "
+                        f"{w_metrics['total_repairs']} vs {w_target_repairs}"
+                    )
                 weekly_records.append(w_metrics)
 
                 # Compute Top-K curves (K = 1..15)

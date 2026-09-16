@@ -73,3 +73,10 @@ REQUIRED_TELEMETRY_COLUMNS: Final[list[str]] = [
     "disconnection_cnt",
     "reboot_cnt",
 ]
+
+REQUIRED_METER_COLUMNS: Final[list[str]] = [
+    "gateway_id",
+    "week_start",
+    "meters_expected",
+    "meters_read",
+]
