@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 import datetime as dt
 import os
 from pathlib import Path
+import threading
 from typing import Any, Sequence
 
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
@@ -97,6 +98,60 @@ def _ensure_data_loaded(app: FastAPI) -> None:
         _reload_data(app)
 
 
+def _is_monday_supported(t_date: dt.date, telemetry_df: pd.DataFrame | None) -> bool:
+    """Checks whether a Monday is supported either as a scored week or via unseen telemetry."""
+    if t_date in SCORED_WEEKS:
+        return True
+    if telemetry_df is not None and not telemetry_df.empty and "ts" in telemetry_df.columns:
+        min_ts = telemetry_df["ts"].min().date()
+        max_ts = telemetry_df["ts"].max().date()
+        # Case 1: Unseen month data extending beyond standard competition horizon
+        if max_ts > dt.date(2026, 3, 31):
+            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
+                return True
+        # Case 2: Synthetic test environment whose date range is entirely outside SCORED_WEEKS
+        data_overlaps_scored = any(min_ts <= w <= max_ts + dt.timedelta(days=7) for w in SCORED_WEEKS)
+        if not data_overlaps_scored:
+            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
+                return True
+    return False
+
+
+def _discover_latest_monday(app: FastAPI) -> dt.date:
+    """Determines the latest available decision Monday from loaded data and competition weeks."""
+    _ensure_data_loaded(app)
+    if hasattr(app.state, "telemetry_df") and app.state.telemetry_df is not None:
+        telemetry_df: pd.DataFrame = app.state.telemetry_df
+        if not telemetry_df.empty and "ts" in telemetry_df.columns:
+            max_ts = telemetry_df["ts"].max().date()
+            # If telemetry extends past the standard competition period (unseen month)
+            if max_ts > dt.date(2026, 3, 31):
+                curr = SCORED_WEEKS[-1] + dt.timedelta(days=7)
+                latest_unseen: dt.date | None = None
+                while curr - dt.timedelta(days=1) <= max_ts:
+                    if curr.weekday() == 0:
+                        latest_unseen = curr
+                    curr += dt.timedelta(days=7)
+                if latest_unseen is not None:
+                    return latest_unseen
+
+            # If telemetry is within standard competition period
+            covered_scored = [w for w in SCORED_WEEKS if w - dt.timedelta(days=1) <= max_ts]
+            if covered_scored:
+                return max(covered_scored)
+
+            # Synthetic dataset outside SCORED_WEEKS
+            min_ts = telemetry_df["ts"].min().date()
+            if max_ts >= min_ts:
+                candidate = max_ts
+                while candidate >= min_ts:
+                    if candidate.weekday() == 0:
+                        return candidate
+                    candidate -= dt.timedelta(days=1)
+
+    return SCORED_WEEKS[-1]
+
+
 def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> dt.date:
     """Parses date string and validates that it represents a supported decision Monday."""
     if app is not None:
@@ -115,19 +170,9 @@ def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> d
             detail=f"Unsupported week_start: {week_start}. Must be a Monday.",
         )
 
-    # Scored competition weeks are always supported
-    if t_date in SCORED_WEEKS:
+    telemetry_df = getattr(app.state, "telemetry_df", None) if app is not None else None
+    if _is_monday_supported(t_date, telemetry_df):
         return t_date
-
-    # Dynamic extension: support any Monday backed by loaded telemetry (e.g. unseen month in live session)
-    if app is not None and hasattr(app.state, "telemetry_df"):
-        telemetry_df: pd.DataFrame = app.state.telemetry_df
-        if not telemetry_df.empty and "ts" in telemetry_df.columns:
-            min_ts = telemetry_df["ts"].min().date()
-            max_ts = telemetry_df["ts"].max().date()
-            # If date falls within available data horizon (allowing up to 7d after last recorded telemetry)
-            if min_ts <= t_date <= max_ts + dt.timedelta(days=7):
-                return t_date
 
     valid_options = [w.isoformat() for w in SCORED_WEEKS]
     raise HTTPException(
@@ -162,12 +207,13 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.data_dir = effective_data_dir
+    app.state.run_lock = threading.Lock()
     if prediction_service is not None:
         app.state.prediction_service = prediction_service
     elif strategy is not None:
         app.state.prediction_service = PredictionService(strategy=strategy)
     else:
-        app.state.prediction_service = default_prediction_service
+        app.state.prediction_service = PredictionService()
 
     app.add_middleware(
         CORSMiddleware,
@@ -195,7 +241,7 @@ def create_app(
         ),
     ) -> PredictionResponse:
         """Ask for this week's 15 gateways to visit. Defaults to the latest competition Monday."""
-        target_week = week_start or SCORED_WEEKS[-1].isoformat()
+        target_week = week_start or _discover_latest_monday(app).isoformat()
         return get_predictions(week_start=target_week)
 
     @app.get(
@@ -248,7 +294,7 @@ def create_app(
             )
 
         canonical_id = normalize_gateway_id(gateway_id)
-        target_week = week_start or SCORED_WEEKS[-1].isoformat()
+        target_week = week_start or _discover_latest_monday(app).isoformat()
         t_date = _parse_and_validate_monday(target_week, app=app)
         master_df: pd.DataFrame = app.state.master_df
         telemetry_df: pd.DataFrame = app.state.telemetry_df
@@ -288,9 +334,86 @@ def create_app(
         summary="Execute prediction for a decision Monday",
     )
     def run_prediction(request: RunRequest) -> PredictionResponse:
-        """Reloads mounted data, then computes a current weekly recommendation list."""
-        _reload_data(app)
-        return get_predictions(week_start=request.week_start)
+        """Reloads mounted data, validates candidate state, and atomically updates API state."""
+        with app.state.run_lock:
+            # 1. Parse date syntax
+            try:
+                t_date = dt.date.fromisoformat(request.week_start)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date format: {request.week_start!r}. Expected YYYY-MM-DD.",
+                )
+
+            # 2. Validate Monday requirement
+            if t_date.weekday() != 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unsupported week_start: {request.week_start}. Must be a Monday.",
+                )
+
+            # 3. Reload candidate data from disk bypassing cache
+            candidate_loader = DataLoader(data_dir=app.state.data_dir)
+            try:
+                candidate_master = candidate_loader.load_master()
+                candidate_telemetry = candidate_loader.load_telemetry()
+            except FileNotFoundError as e:
+                raise HTTPException(status_code=500, detail=f"Data reload failed: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Data reload error: {e}")
+
+            # 4. Validate candidate dataframes
+            if candidate_master is None or candidate_master.empty or "gateway_id" not in candidate_master.columns:
+                raise HTTPException(status_code=500, detail="Invalid master data: empty or missing required columns.")
+            if candidate_telemetry is None or candidate_telemetry.empty or "ts" not in candidate_telemetry.columns:
+                raise HTTPException(status_code=500, detail="Invalid telemetry data: empty or missing required columns.")
+
+            # 5. Validate whether requested week is supported in the candidate telemetry
+            if not _is_monday_supported(t_date, candidate_telemetry):
+                valid_options = [w.isoformat() for w in SCORED_WEEKS]
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Unsupported week_start: {request.week_start}. "
+                        f"Must be one of the 8 scored competition Mondays: {valid_options}"
+                    ),
+                )
+
+            # 6. Compute candidate predictions
+            try:
+                candidate_preds = app.state.prediction_service.predict(
+                    master_df=candidate_master,
+                    telemetry_df=candidate_telemetry,
+                    decision_monday=t_date,
+                    top_k=VISITS_PER_WEEK,
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Prediction computation failed: {e}")
+
+            # 7. Validate complete candidate result
+            if len(candidate_preds) != VISITS_PER_WEEK:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Prediction result invalid: expected {VISITS_PER_WEEK} rows, got {len(candidate_preds)}.",
+                )
+            if len(set(candidate_preds["gateway_id"])) != VISITS_PER_WEEK:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Prediction result invalid: duplicate gateway IDs detected.",
+                )
+
+            # 8. Atomically replace application state
+            app.state.loader = candidate_loader
+            app.state.master_df = candidate_master
+            app.state.telemetry_df = candidate_telemetry
+
+            # 9. Return validated predictions
+            records = [Prediction(**row) for row in candidate_preds.to_dict(orient="records")]
+            return PredictionResponse(
+                week_start=t_date.isoformat(),
+                count=len(records),
+                predictions=records,
+            )
 
     @app.get(
         "/gateways/{gateway_id}",
@@ -330,13 +453,7 @@ def create_app(
 
         is_eligible = None
         if week_start is not None:
-            try:
-                target_date = dt.date.fromisoformat(week_start)
-            except (ValueError, TypeError):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid date format for week_start: {week_start!r}. Expected YYYY-MM-DD.",
-                )
+            target_date = _parse_and_validate_monday(week_start, app=app)
             eligible_fleet = get_eligible_gateways(master_df, target_date)
             is_eligible = canonical_id in set(eligible_fleet)
 

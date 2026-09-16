@@ -1,4 +1,4 @@
-﻿"""Tests for swappable prediction strategy abstraction (Area B requirement).
+"""Tests for swappable prediction strategy abstraction (Area B requirement).
 
 Verifies:
 1. Baseline3SigmaStrategy produces identical output to authoritative scoring/ranking.
@@ -49,11 +49,13 @@ class SyntheticFakeStrategy:
             rows.append({
                 "week_start": t_str,
                 "rank": i,
-                "gateway_id": f"0080E1FFFFFF{i:02X}"[:12],
+                "gateway_id": f"0080E1{i:06X}",
                 "score": float(1000 - i),
                 "reason": f"Synthetic test reason for priority asset {i}",
             })
-        return pd.DataFrame(rows)[REQUIRED_PREDICTION_COLUMNS]
+        df = pd.DataFrame(rows)[REQUIRED_PREDICTION_COLUMNS]
+        assert len(set(df["gateway_id"])) == top_k, "Synthetic strategy must generate unique gateway IDs"
+        return df
 
 
 @pytest.fixture
@@ -178,6 +180,7 @@ def test_api_with_swapped_strategy(minimal_api_data_dir):
         first_pred = data["predictions"][0]
         assert first_pred["score"] == 999.0
         assert "Synthetic test reason" in first_pred["reason"]
+        assert len({p["gateway_id"] for p in data["predictions"]}) == 15
 
 
 def test_api_dynamic_strategy_swap_at_runtime(minimal_api_data_dir):
@@ -198,3 +201,4 @@ def test_api_dynamic_strategy_swap_at_runtime(minimal_api_data_dir):
         data = response.json()
         assert data["predictions"][0]["score"] == 999.0
         assert "Synthetic test reason" in data["predictions"][0]["reason"]
+        assert len({p["gateway_id"] for p in data["predictions"]}) == 15
