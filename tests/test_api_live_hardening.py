@@ -241,3 +241,120 @@ def test_health_endpoint_is_fast_and_independent(live_eval_env):
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
         assert duration < 0.2, f"Health check took too long: {duration:.3f}s"
+
+
+def test_gateway_explanation_canonical_week_validation(live_eval_env):
+    """GET /gateways/{id}/explanation?week_start=... uses canonical week validation."""
+    app = create_app(data_dir=live_eval_env)
+    with TestClient(app) as client:
+        # Malformed date -> 400
+        r_mal = client.get("/gateways/001A7D000001/explanation?week_start=invalid-date")
+        assert r_mal.status_code == 400
+        assert "Invalid date format" in r_mal.json()["detail"]
+
+        # Non-Monday -> 404
+        r_non = client.get("/gateways/001A7D000001/explanation?week_start=2026-02-03")
+        assert r_non.status_code == 404
+        assert "Must be a Monday" in r_non.json()["detail"]
+
+        # Valid supported Monday -> 200
+        r_ok = client.get("/gateways/001A7D000001/explanation?week_start=2026-03-23")
+        assert r_ok.status_code == 200
+        assert r_ok.json()["gateway_id"] == "001A7D000001"
+        assert r_ok.json()["week_start"] == "2026-03-23"
+
+
+def test_frontend_and_api_route_regression():
+    """Verifies that all core documentation, static UI, and API routes remain accessible."""
+    app = create_app(data_dir="data")
+    with TestClient(app) as client:
+        # Frontend UI root
+        assert client.get("/").status_code == 200
+
+        # Health
+        assert client.get("/health").status_code == 200
+
+        # OpenAPI docs
+        assert client.get("/docs").status_code == 200
+        assert client.get("/openapi.json").status_code == 200
+
+        # Standard prediction endpoint
+        resp_pred = client.get("/predictions/2026-02-02")
+        assert resp_pred.status_code == 200
+        assert resp_pred.json()["count"] == 15
+
+
+class FailingStrategy:
+    """Strategy that raises an exception during prediction computation."""
+    @property
+    def name(self) -> str:
+        return "FailingStrategy"
+
+    def predict(self, master_df, telemetry_df, decision_monday, top_k=15):
+        raise RuntimeError("Simulated internal algorithm failure")
+
+
+def test_failed_computation_preserves_old_valid_state(live_eval_env):
+    """Proves atomicity when prediction computation fails: old state remains intact."""
+    app = create_app(data_dir=live_eval_env)
+    with TestClient(app) as client:
+        # Initial query succeeds
+        initial_resp = client.get("/predictions/2026-03-23")
+        assert initial_resp.status_code == 200
+        initial_data = initial_resp.json()
+
+        # Inject a failing strategy
+        app.state.prediction_service.strategy = FailingStrategy()
+
+        # POST /run fails during computation
+        resp_fail = client.post("/run", json={"week_start": "2026-03-23"})
+        assert resp_fail.status_code == 500
+        assert "Prediction computation failed" in resp_fail.json()["detail"]
+
+        # Restore working strategy
+        app.state.prediction_service.strategy = Baseline3SigmaStrategy()
+
+        # Previous state is still available and untouched
+        resp_after = client.get("/predictions/2026-03-23")
+        assert resp_after.status_code == 200
+        assert resp_after.json() == initial_data
+
+
+class MalformedOutputStrategy:
+    """Strategy that returns invalid prediction output (only 5 rows instead of 15)."""
+    @property
+    def name(self) -> str:
+        return "MalformedOutputStrategy"
+
+    def predict(self, master_df, telemetry_df, decision_monday, top_k=15):
+        # Return incomplete rows
+        t_str = decision_monday.isoformat() if isinstance(decision_monday, dt.date) else str(decision_monday)
+        return pd.DataFrame([
+            {"week_start": t_str, "rank": 1, "gateway_id": "001A7D000001", "score": 10.0, "reason": "Test reason"}
+        ])
+
+
+def test_failed_validation_preserves_old_valid_state(live_eval_env):
+    """Proves atomicity when prediction output fails validation: old state remains intact."""
+    app = create_app(data_dir=live_eval_env)
+    with TestClient(app) as client:
+        # Initial query succeeds
+        initial_resp = client.get("/predictions/2026-03-23")
+        assert initial_resp.status_code == 200
+        initial_data = initial_resp.json()
+
+        # Inject malformed output strategy
+        app.state.prediction_service.strategy = MalformedOutputStrategy()
+
+        # POST /run fails during validation
+        resp_fail = client.post("/run", json={"week_start": "2026-03-23"})
+        assert resp_fail.status_code == 500
+        assert "Prediction validation failed" in resp_fail.json()["detail"]
+
+        # Restore working strategy
+        app.state.prediction_service.strategy = Baseline3SigmaStrategy()
+
+        # Previous state is still available and untouched
+        resp_after = client.get("/predictions/2026-03-23")
+        assert resp_after.status_code == 200
+        assert resp_after.json() == initial_data

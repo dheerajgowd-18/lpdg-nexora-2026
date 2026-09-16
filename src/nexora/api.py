@@ -31,6 +31,7 @@ from .config import (
 )
 from .data_loader import DataLoader, is_valid_gateway_id, normalize_gateway_id
 from .eligibility import get_eligible_gateways
+from .validation import validate_predictions_df
 from .strategy import (
     PredictionStrategy,
     PredictionService,
@@ -117,7 +118,7 @@ def _is_monday_supported(t_date: dt.date, telemetry_df: pd.DataFrame | None) -> 
     return False
 
 
-def _discover_latest_monday(app: FastAPI) -> dt.date:
+def _get_latest_available_week(app: FastAPI) -> dt.date:
     """Determines the latest available decision Monday from loaded data and competition weeks."""
     _ensure_data_loaded(app)
     if hasattr(app.state, "telemetry_df") and app.state.telemetry_df is not None:
@@ -150,6 +151,9 @@ def _discover_latest_monday(app: FastAPI) -> dt.date:
                     candidate -= dt.timedelta(days=1)
 
     return SCORED_WEEKS[-1]
+
+
+_discover_latest_monday = _get_latest_available_week
 
 
 def _parse_and_validate_monday(week_start: str, app: FastAPI | None = None) -> dt.date:
@@ -390,19 +394,20 @@ def create_app(
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Prediction computation failed: {e}")
 
-            # 7. Validate complete candidate result
-            if len(candidate_preds) != VISITS_PER_WEEK:
+            # 7. Validate complete candidate predictions BEFORE committing
+            validation_errors = validate_predictions_df(candidate_preds, scored_weeks=[t_date])
+            eligible_gateways = set(get_eligible_gateways(candidate_master, t_date))
+            ineligible_ids = [gid for gid in candidate_preds["gateway_id"] if gid not in eligible_gateways]
+            if ineligible_ids:
+                validation_errors.append(f"Predicted gateways contain ineligible assets: {ineligible_ids[:3]}")
+
+            if validation_errors:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Prediction result invalid: expected {VISITS_PER_WEEK} rows, got {len(candidate_preds)}.",
-                )
-            if len(set(candidate_preds["gateway_id"])) != VISITS_PER_WEEK:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Prediction result invalid: duplicate gateway IDs detected.",
+                    detail=f"Prediction validation failed: {'; '.join(validation_errors)}",
                 )
 
-            # 8. Atomically replace application state
+            # 8. Atomically replace application state ONLY after validation passes
             app.state.loader = candidate_loader
             app.state.master_df = candidate_master
             app.state.telemetry_df = candidate_telemetry
